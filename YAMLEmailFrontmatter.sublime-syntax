@@ -1,0 +1,60 @@
+%YAML 1.2
+---
+name: YAMLEmailFrontmatter
+scope: source.yaml.email-frontmatter
+version: 2
+hidden: true
+extends: Packages/YAML/YAML.sublime-syntax
+
+contexts:
+  main:
+    - meta_prepend: true
+
+    # Sender line with quoted value
+    - match: ^(from|sender)\s*:\s*"([^"\r\n]*)"
+      captures:
+        1: keyword.other.email.sender.key.yaml
+        2: entity.name.email.sender.yaml
+      scope: meta.email.sender-line.yaml
+
+    # Sender line with unquoted value
+    - match: ^(from|sender)\s*:\s*([^\r\n#]+?)(\s*(?:#.*)?)$
+      captures:
+        1: keyword.other.email.sender.key.yaml
+        2: entity.name.email.sender.yaml
+        3: comment.line.number-sign.yaml
+      scope: meta.email.sender-line.yaml
+
+    # Sender email with quoted value
+    - match: ^(from_email)\s*:\s*"([^"\r\n]*)"
+      captures:
+        1: keyword.other.email.sender-email.key.yaml
+        2: string.unquoted.email.sender-email.yaml
+      scope: meta.email.sender-email-line.yaml
+
+    # Sender email with unquoted value
+    - match: ^(from_email)\s*:\s*([^\r\n#]+?)(\s*(?:#.*)?)$
+      captures:
+        1: keyword.other.email.sender-email.key.yaml
+        2: string.unquoted.email.sender-email.yaml
+        3: comment.line.number-sign.yaml
+      scope: meta.email.sender-email-line.yaml
+
+    # Simple boolean flag line.
+    - match: ^\s*(toreply)(\s*:\s*)(true)\s*$
+      captures:
+        1: entity.name.email.toreply.yaml
+        2: punctuation.separator.key-value.yaml
+        3: constant.language.boolean.true.yaml
+
+    # Attachments key and its list items
+    - match: ^(attachments)\s*:\s*(\[.*\])?\s*$
+      captures:
+        1: keyword.other.email.attachments.key.yaml
+        2: meta.flow.yaml  # Empty list case
+      push:
+        - match: ^\s*-\s*"([^"\r\n]*)"
+          captures:
+            1: entity.name.attachment.yaml
+        - match: ^(?=\S)|^(?=\s*$)
+          pop: true

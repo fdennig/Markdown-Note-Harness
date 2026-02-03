@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>name</key>
+    <string>Symbol List: TODO Items</string>
+    <key>scope</key>
+    <string>entity.name.tag.todo.unchecked.markdown.line</string>
+    <key>settings</key>
+    <dict>
+        <key>showInSymbolList</key>
+        <integer>1</integer>
+        <key>showInIndexedSymbolList</key>
+        <integer>1</integer>
+        <key>symbolTransformation</key>
+        <string>
+            s/^\s*[\*\+\-]\s*\[\s\]\s*//;  # Remove bullet and [ ]
+            s/^\s+//;                       # Trim leading whitespace
+            s/\s+$//;                       # Trim trailing whitespace
+        </string>
+        <key>symbolIndexTransformation</key>
+        <string>
+            s/^\s*[\*\+\-]\s*\[\s\]\s*//;
+            s/^\s+//;
+            s/\s+$//;
+        </string>
+        <key>kind</key>
+        <string>markup.list</string>
+    </dict>
+</dict>
+</plist>

@@ -9,6 +9,19 @@
             { "key": "selector", "operator": "equal", "operand": "meta.link.inline.description.markdown", "match_all": true }
         ] 
     },
+    { // Open email attachemtn
+        "keys": ["f12"], "command": "open_frontmatter_attachment", "context":
+        [
+            { "key": "selector", "operator": "equal", "operand": "entity.name.attachment.yaml", "match_all": true }
+        ] 
+    },
+    {
+      "keys": ["tab"],
+      "command": "mde_pick_wiki_link_page_name",
+      "context": [
+        { "key": "selector", "operator": "equal", "operand": "meta.link.reference.wiki.description.markdown" }
+      ]
+    },
     { "keys": ["tab"], "command": "mde_make_page_reference", "context":
         [
             { "key": "selector", "operator": "equal", "operand": "text.html.markdown & meta.link.reference.description.markdown", "match_all": true },

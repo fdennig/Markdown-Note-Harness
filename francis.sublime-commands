@@ -6,4 +6,19 @@
       
       "args"   : {}
     },
+    {
+      "caption": "Open Markdown Link",
+      // "command": "prompt_add_string_to_selection",
+      "command": "open_linked_file",
+      
+      "args"   : {}
+    },
+    {
+      "caption": "Markdown: Collect TODOs", 
+      "command": "markdown_collect_todos"
+    },
+    {
+      "caption": "Markdown: Resolve Checked TODOs",
+      "command": "markdown_resolve_todos"
+    }
 ]
