@@ -186,8 +186,11 @@ def sync_view_to_yaml(window, view):
     
     db = load_db(yml_path)
     all_todos = db.get("open_todos", [])
-    
+    resolved_todos = db.get("resolved_todos", [])
+
+    # Check both open and resolved todos to prevent duplicates
     existing_texts = set(item['text'] for item in all_todos)
+    resolved_texts = set(item['text'] for item in resolved_todos)
 
     symbols = view.indexed_symbol_regions()
     new_todos_count = 0
@@ -201,7 +204,8 @@ def sync_view_to_yaml(window, view):
                 continue
             seen_in_view.add(text)
 
-            if text in existing_texts:
+            # Skip if already in open_todos or resolved_todos
+            if text in existing_texts or text in resolved_texts:
                 continue
             
             entry = {
@@ -226,14 +230,14 @@ def sync_view_to_yaml(window, view):
             # Check if urgency changed
             if db_text.startswith('!'):
                 text_without = db_text[1:].strip()
-                # If the non-urgent version is in the view
-                if text_without in seen_in_view:
+                # If the non-urgent version is in the view (and not in resolved)
+                if text_without in seen_in_view and text_without not in resolved_texts:
                     existing_todo['text'] = text_without
                     urgency_changed = True
             else:
                 text_with = "! " + db_text
-                # If the urgent version is in the view
-                if text_with in seen_in_view:
+                # If the urgent version is in the view (and not in resolved)
+                if text_with in seen_in_view and text_with not in resolved_texts:
                     existing_todo['text'] = text_with
                     urgency_changed = True
 
