@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import webbrowser
+import tempfile
 
 # ---------------------------
 # Helper function to open file or URL
@@ -123,3 +124,169 @@ class OpenFrontmatterAttachmentCommand(sublime_plugin.TextCommand):
                 open_file(attachment_path)
             else:
                 print("Current file not saved; cannot resolve relative path")
+
+# ---------------------------
+# Command 3: Convert Office files to Markdown
+# ---------------------------
+class ConvertToMarkdownCommand(sublime_plugin.WindowCommand):
+    """
+    Convert Word/PowerPoint/PDF files to Markdown using Pandoc and marker-pdf.
+    Opens the result in a new buffer in Sublime Text.
+    """
+    PANDOC_PATH = r"C:\portablePrograms\pandoc-3.6.4\pandoc.exe"
+    MARKER_SINGLE_PATH = r"C:\portablePrograms\python\Scripts\marker_single.exe"
+
+    def run(self, file_path=None):
+        if file_path:
+            self.convert_file(file_path)
+        else:
+            # Check clipboard for a file path first
+            initial_path = ""
+            clipboard_text = sublime.get_clipboard().strip()
+
+            # Check if clipboard contains a valid file path
+            if clipboard_text:
+                # Strip quotes if present
+                clipboard_text = clipboard_text.strip('"').strip("'")
+                # Normalize path
+                clipboard_path = os.path.normpath(clipboard_text)
+                # Use clipboard path if it's a valid file
+                if os.path.isfile(clipboard_path):
+                    initial_path = clipboard_path
+
+            self.window.show_input_panel(
+                "File to convert to Markdown (Word/PowerPoint/PDF):",
+                initial_path,
+                self.convert_file,
+                None,
+                None
+            )
+
+    def convert_file(self, file_path):
+        if not file_path:
+            sublime.error_message("No file path provided")
+            return
+
+        # Strip quotes and whitespace
+        file_path = file_path.strip().strip('"').strip("'")
+
+        # Normalize path
+        file_path = os.path.normpath(file_path)
+
+        print("ConvertToMarkdown: Checking file path: {0}".format(file_path))
+
+        if not os.path.exists(file_path):
+            sublime.error_message("File does not exist: {0}".format(file_path))
+            print("ConvertToMarkdown: File not found")
+            return
+
+        print("ConvertToMarkdown: File found, proceeding with conversion")
+
+        # Check file extension
+        _, ext = os.path.splitext(file_path)
+        ext = ext.lower()
+        if ext not in ['.docx', '.pptx', '.doc', '.ppt', '.pdf']:
+            sublime.error_message("Unsupported file type. Please use .docx, .pptx, or .pdf files.")
+            return
+
+        try:
+            file_dir = os.path.dirname(file_path)
+            basename = os.path.basename(file_path)
+            name_without_ext = os.path.splitext(basename)[0]
+
+            # On Windows, prevent console window from appearing
+            startupinfo = None
+            if sublime.platform() == "windows":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+            # Use different converter based on file type
+            if ext == '.pdf':
+                # Use marker-pdf for PDF files
+                output_dir = tempfile.mkdtemp()
+                cmd = [
+                    self.MARKER_SINGLE_PATH,
+                    file_path,
+                    '--output_dir', output_dir,
+                    '--output_format', 'markdown'
+                ]
+
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    startupinfo=startupinfo,
+                    universal_newlines=True
+                )
+
+                stdout, stderr = process.communicate()
+
+                if process.returncode != 0:
+                    error_msg = "marker-pdf conversion failed (exit code {0}):\n{1}".format(
+                        process.returncode,
+                        stderr if stderr else "No error details available"
+                    )
+                    sublime.error_message(error_msg)
+                    print("marker-pdf stderr: {0}".format(stderr))
+                    return
+
+                # Read the generated markdown file
+                output_md = os.path.join(output_dir, name_without_ext, "{0}.md".format(name_without_ext))
+                if not os.path.exists(output_md):
+                    # Try alternative path structure
+                    output_md = os.path.join(output_dir, "{0}.md".format(name_without_ext))
+
+                if not os.path.exists(output_md):
+                    sublime.error_message("marker-pdf completed but output file not found:\n{0}".format(output_md))
+                    return
+
+                with open(output_md, 'r', encoding='utf-8') as f:
+                    markdown_content = f.read()
+
+            else:
+                # Use Pandoc for Word/PowerPoint files
+                media_dir = os.path.join(file_dir, 'media')
+                cmd = [
+                    self.PANDOC_PATH,
+                    file_path,
+                    '-t', 'markdown',
+                    '--wrap=none',
+                    '--extract-media={0}'.format(media_dir)
+                ]
+
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=file_dir,
+                    startupinfo=startupinfo,
+                    universal_newlines=True
+                )
+
+                stdout, stderr = process.communicate()
+
+                if process.returncode != 0:
+                    error_msg = "Pandoc conversion failed (exit code {0}):\n{1}".format(
+                        process.returncode,
+                        stderr if stderr else "No error details available"
+                    )
+                    sublime.error_message(error_msg)
+                    print("Pandoc stderr: {0}".format(stderr))
+                    return
+
+                markdown_content = stdout
+
+            # Create a new buffer and insert the markdown
+            new_view = self.window.new_file()
+            new_view.set_syntax_file('Packages/Markdown/Markdown.sublime-syntax')
+            new_view.run_command('append', {'characters': markdown_content})
+
+            # Set the name to indicate source
+            new_view.set_name("{0}.md".format(name_without_ext))
+
+            # Set scratch to false so it can be saved
+            new_view.set_scratch(False)
+
+            self.window.status_message("Converted {0} to Markdown".format(basename))
+        except Exception as e:
+            sublime.error_message("Error during conversion: {0}".format(str(e)))

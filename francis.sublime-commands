@@ -20,5 +20,9 @@
     {
       "caption": "Markdown: Resolve Checked TODOs",
       "command": "markdown_resolve_todos"
+    },
+    {
+      "caption": "Convert Office File to Markdown",
+      "command": "convert_to_markdown"
     }
 ]
