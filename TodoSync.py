@@ -213,7 +213,31 @@ def sync_view_to_yaml(window, view):
             existing_texts.add(text)
             new_todos_count += 1
 
-    if new_todos_count > 0:
+    # Check for urgency updates in existing todos from this file
+    urgency_changed = False
+    for existing_todo in all_todos:
+        if existing_todo['filepath'] == rel_path_no_ext:
+            db_text = existing_todo['text']
+
+            # Skip if the exact text is still in the view (no change)
+            if db_text in seen_in_view:
+                continue
+
+            # Check if urgency changed
+            if db_text.startswith('!'):
+                text_without = db_text[1:].strip()
+                # If the non-urgent version is in the view
+                if text_without in seen_in_view:
+                    existing_todo['text'] = text_without
+                    urgency_changed = True
+            else:
+                text_with = "! " + db_text
+                # If the urgent version is in the view
+                if text_with in seen_in_view:
+                    existing_todo['text'] = text_with
+                    urgency_changed = True
+
+    if new_todos_count > 0 or urgency_changed:
         all_todos.sort(key=lambda x: (x['filepath'], x['created_at']))
         db["open_todos"] = all_todos
         save_db(yml_path, db)
@@ -316,13 +340,16 @@ def generate_markdown_report(window):
     files_map = {}
     for t in todos:  # Include ALL todos (urgent + normal) in By File section
         filepath = t.get('filepath', 'Unknown')
+        # Skip inbox-only todos (no real source file)
+        if filepath == "todoUNDP":
+            continue
         if filepath not in files_map:
             files_map[filepath] = []
         files_map[filepath].append(t)
-    
+
     log_message("Files found: {}".format(len(files_map)))
     sorted_filepaths = sorted(files_map.keys())
-    
+
     for filepath in sorted_filepaths:
         try:
             display_name = get_display_name(filepath)
@@ -351,6 +378,83 @@ def generate_markdown_report(window):
 # ------------------------------
 # Core Logic: Resolve Todos
 # ------------------------------
+
+def update_source_urgency(window, text_content, filepath_relative):
+    """
+    Updates the source file to mark a todo as urgent by adding ! prefix.
+    """
+    parent_folder = get_parent_folder(window)
+    if not parent_folder:
+        return False
+
+    target_path = os.path.join(parent_folder, filepath_relative + ".md")
+
+    if not os.path.exists(target_path):
+        print("TodoSync Urgency: Source '{}' not found.".format(target_path))
+        return False
+
+    try:
+        with open(target_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        escaped_text = re.escape(text_content)
+        # Match: - [ ] text_content -> - [ ] ! text_content
+        pattern = r"^(\s*[-*+]\s*\[\s*\]\s*)({})".format(escaped_text)
+        new_content, count = re.subn(pattern, r"\1! \2", content, flags=re.MULTILINE)
+
+        if count > 0:
+            with open(target_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            print("TodoSync Urgency: Updated source {}".format(target_path))
+            return True
+        else:
+            print("TodoSync Urgency: Text '{}' not found in {}".format(text_content, target_path))
+            return False
+
+    except Exception as e:
+        print("TodoSync Urgency: Error updating source: {}".format(e))
+        return False
+
+def remove_source_urgency(window, text_content_with_exclaim, filepath_relative):
+    """
+    Updates the source file to remove urgency by removing ! prefix.
+    text_content_with_exclaim should include the "! " prefix.
+    """
+    parent_folder = get_parent_folder(window)
+    if not parent_folder:
+        return False
+
+    target_path = os.path.join(parent_folder, filepath_relative + ".md")
+
+    if not os.path.exists(target_path):
+        print("TodoSync De-urgency: Source '{}' not found.".format(target_path))
+        return False
+
+    try:
+        with open(target_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # text_content_with_exclaim is like "! Task"
+        escaped_text = re.escape(text_content_with_exclaim)
+        # Match: - [ ] ! Task -> - [ ] Task
+        pattern = r"^(\s*[-*+]\s*\[\s*\]\s*)({})".format(escaped_text)
+
+        # Remove the "! " part
+        text_without = text_content_with_exclaim[1:].strip()  # Remove "!"
+        new_content, count = re.subn(pattern, r"\1{}".format(text_without), content, flags=re.MULTILINE)
+
+        if count > 0:
+            with open(target_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            print("TodoSync De-urgency: Updated source {}".format(target_path))
+            return True
+        else:
+            print("TodoSync De-urgency: Text '{}' not found in {}".format(text_content_with_exclaim, target_path))
+            return False
+
+    except Exception as e:
+        print("TodoSync De-urgency: Error updating source: {}".format(e))
+        return False
 
 def resolve_source_file(window, text_content, filepath_relative):
     """
@@ -456,8 +560,27 @@ def process_resolutions(window):
 
     # 4. HANDLE INBOX-ONLY TODOS (Add to open_todos if not present)
     existing_texts = set(item['text'] for item in open_todos)
-    
+
     for inbox_text in inbox_only_todos:
+        # Check if this is an urgency update (starts with !)
+        if inbox_text.startswith('!'):
+            text_without_exclaim = inbox_text[1:].strip()
+            # Check if the non-urgent version exists
+            matching_entry = None
+            for t in open_todos:
+                if t['text'] == text_without_exclaim and t.get('filepath') == "todoUNDP":
+                    matching_entry = t
+                    break
+
+            if matching_entry:
+                # Update existing entry to be urgent
+                matching_entry['text'] = inbox_text
+                existing_texts.discard(text_without_exclaim)
+                existing_texts.add(inbox_text)
+                updates_made = True
+                continue
+
+        # Normal flow: add if not present
         if inbox_text not in existing_texts:
             entry = {
                 "text": inbox_text,
@@ -467,6 +590,79 @@ def process_resolutions(window):
             open_todos.append(entry)
             existing_texts.add(inbox_text)
             updates_made = True
+
+    # 4B. HANDLE URGENCY UPDATES FOR SOURCE-FILE TODOS
+    # Pattern for unchecked with wikilink: - [ ] Text [[DisplayName]]
+    unchecked_with_source_pattern = re.compile(r"^\s*[-*+]\s*\[\s*\]\s*(.*?)\s*\[\[(.*?)\]\]\s*$")
+
+    for line in active_lines:
+        match = unchecked_with_source_pattern.match(line)
+        if match:
+            text_content = match.group(1).strip()
+            display_name = match.group(2).strip()
+
+            # Only process if it starts with ! (potential urgency update)
+            if text_content.startswith('!'):
+                text_without_exclaim = text_content[1:].strip()
+
+                # Find matching entry without !
+                for t in open_todos:
+                    if t['text'] == text_without_exclaim:
+                        # Verify it matches by display name
+                        if get_display_name(t.get('filepath')) == display_name:
+                            # Update database
+                            t['text'] = text_content
+                            updates_made = True
+
+                            # Update source file
+                            source_filepath = t.get('filepath')
+                            if source_filepath and source_filepath != "todoUNDP":
+                                update_source_urgency(window, text_without_exclaim, source_filepath)
+                            break
+
+    # 4C. HANDLE DE-URGENCY UPDATES (Removing ! from urgent todos)
+    # Check inbox-only todos
+    for inbox_text in inbox_only_todos:
+        # Check if this is NOT urgent (doesn't start with !)
+        if not inbox_text.startswith('!'):
+            # Check if the urgent version exists in database
+            text_with_exclaim = "! " + inbox_text
+            matching_entry = None
+            for t in open_todos:
+                if t['text'] == text_with_exclaim and t.get('filepath') == "todoUNDP":
+                    matching_entry = t
+                    break
+
+            if matching_entry:
+                # Update existing entry to be non-urgent
+                matching_entry['text'] = inbox_text
+                updates_made = True
+
+    # Check source-file todos for de-urgency
+    for line in active_lines:
+        match = unchecked_with_source_pattern.match(line)
+        if match:
+            text_content = match.group(1).strip()
+            display_name = match.group(2).strip()
+
+            # Only process if it does NOT start with ! (potential de-urgency update)
+            if not text_content.startswith('!'):
+                text_with_exclaim = "! " + text_content
+
+                # Find matching entry with !
+                for t in open_todos:
+                    if t['text'] == text_with_exclaim:
+                        # Verify it matches by display name
+                        if get_display_name(t.get('filepath')) == display_name:
+                            # Update database
+                            t['text'] = text_content
+                            updates_made = True
+
+                            # Update source file
+                            source_filepath = t.get('filepath')
+                            if source_filepath and source_filepath != "todoUNDP":
+                                remove_source_urgency(window, text_with_exclaim, source_filepath)
+                            break
 
     # 5. HANDLE RESOLUTIONS
     for item in resolved_in_report:
