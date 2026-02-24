@@ -8,12 +8,25 @@ Private Declare PtrSafe Function ShellExecute Lib "shell32.dll" Alias "ShellExec
     ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, _
     ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As Long
 Sub ExtractEmail()
+    ExtractEmailCore False, False
+End Sub
+
+Sub ExtractEmailToReply()
+    ExtractEmailCore True, False
+End Sub
+
+Sub ExtractEmailWithAttachments()
+    ExtractEmailCore False, True
+End Sub
+
+Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean)
 
     Dim vaultPathToSaveFileTo As String
     Dim emailFileNameStartChr As String
     Dim emailTypeLink As String
     Dim personNameStartChar As String
-    config vaultPathToSaveFileTo, personNameStartChar, emailFileNameStartChr, emailTypeLink
+    Dim attachmentPath As String
+    config vaultPathToSaveFileTo, personNameStartChar, emailFileNameStartChr, emailTypeLink, attachmentPath
 
     '================================================'
     ' Save as plain text
@@ -79,13 +92,8 @@ Sub ExtractEmail()
         
         ' Start YAML frontmatter
         resultString = "---" & vbCrLf
-        resultString = resultString & "toreply: " & vbCrLf
-        ' Add classification and optional properties
+        resultString = resultString & "toreply: " & IIf(toReply, "true", "") & vbCrLf
         resultString = resultString & "class: email" & vbCrLf
-        resultString = resultString & "area: " & vbCrLf
-        resultString = resultString & "project: " & vbCrLf
-    resultString = resultString & "title: """ & temporarySubjectLineString & """" & vbCrLf
-    ' Added subject key mirroring title for downstream tooling
     resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf
         resultString = resultString & "date: " & Format(oMail.ReceivedTime, "yyyy-MM-dd HH:mm") & vbCrLf
         resultString = resultString & "from: """ & sender & """" & vbCrLf
@@ -101,15 +109,16 @@ Sub ExtractEmail()
             resultString = resultString & "  - """ & formatName(recip.Name, personNameStartChar) & """" & vbCrLf
         Next
         resultString = resultString & "tags:" & vbCrLf
-        resultString = resultString & "related:" & vbCrLf
-        ' Attachments list (names only) or empty list inside front matter
+        ' Attachments list inside front matter
         Dim att As Attachment, attName As String
+        Dim attPrefix As String
+        attPrefix = IIf(saveAttachments, Format(dtDate, "yyyy-MM-dd_HHNN") & "_", "")
         If oMail.Attachments.Count > 0 Then
             resultString = resultString & "attachments:" & vbCrLf
             For Each att In oMail.Attachments
                 attName = att.fileName
                 attName = Replace(attName, """", "''")
-                resultString = resultString & "  - """ & attName & """" & vbCrLf
+                resultString = resultString & "  - """ & attPrefix & attName & """" & vbCrLf
             Next att
         Else
             resultString = resultString & "attachments: []" & vbCrLf
@@ -151,8 +160,17 @@ Sub ExtractEmail()
     fileName = emailFileNameStartChr & dateToken & "_" & timeToken & " @" & senderToken & " - " & subjectForFile & ".md"
 
     ' Save the result
-    ' outputItem.SaveAs vaultPathToSaveFileTo & fileName, OLTXT
     SaveAsUTF8 vaultPathToSaveFileTo & fileName, resultString
+
+    ' Save attachments to disk if requested
+    If saveAttachments And oMail.Attachments.Count > 0 Then
+        Dim attPath As String
+        attPath = attachmentPath
+        Dim attItem As Attachment
+        For Each attItem In oMail.Attachments
+            attItem.SaveAsFile attPath & attPrefix & attItem.fileName
+        Next attItem
+    End If
 
     ' Open the saved markdown file in Sublime Text instead of Obsidian.
     ' Requires the 'subl' command line tool to be available in PATH.
