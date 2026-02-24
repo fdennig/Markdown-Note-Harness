@@ -21,7 +21,7 @@ Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String
     '================================================'
     ' Make sure this is the absolute path where you want your files to be sent to
     ' !IMPORTANT! make sure you have a trailing backslash at the end of the path `\`
-    vaultPathToSaveFileTo = "C:\Users\YourUsername\Obsidian\Vault\Emails\"
+    vaultPathToSaveFileTo = "C:\Users\francis.dennig\OneDrive - United Nations Development Programme\UNDPnotes\emails\"
     '================================================'
     ' This is what is added to the links inside the produced documents for people
     ' so it would look like:
@@ -71,3 +71,4 @@ Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String
     contactTypeLink = "[[@]]"
     
 End Sub
+

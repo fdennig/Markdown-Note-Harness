@@ -79,41 +79,47 @@ Sub ExtractEmail()
         
         ' Start YAML frontmatter
         resultString = "---" & vbCrLf
-        
+        resultString = resultString & "toreply: " & vbCrLf
         ' Add classification and optional properties
         resultString = resultString & "class: email" & vbCrLf
         resultString = resultString & "area: " & vbCrLf
         resultString = resultString & "project: " & vbCrLf
-        resultString = resultString & "title: """ & temporarySubjectLineString & """" & vbCrLf
+    resultString = resultString & "title: """ & temporarySubjectLineString & """" & vbCrLf
+    ' Added subject key mirroring title for downstream tooling
+    resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf
         resultString = resultString & "date: " & Format(oMail.ReceivedTime, "yyyy-MM-dd HH:mm") & vbCrLf
         resultString = resultString & "from: """ & sender & """" & vbCrLf
-
+        ' Add sender email address if available (placed once here)
+        Dim senderEmail As String
+        senderEmail = GetSenderSmtp(oMail)
+        If Len(senderEmail) > 0 Then
+            resultString = resultString & "from_email: """ & senderEmail & """" & vbCrLf
+        End If
         ' Convert recipients to YAML list
         resultString = resultString & "to:" & vbCrLf
         For Each recip In recips
             resultString = resultString & "  - """ & formatName(recip.Name, personNameStartChar) & """" & vbCrLf
         Next
-
-        ' Add tags
         resultString = resultString & "tags:" & vbCrLf
-
-        ' Add related
         resultString = resultString & "related:" & vbCrLf
-        
-        ' Placeholder for attachments
-        resultString = resultString & "attachments: []" & vbCrLf
+        ' Attachments list (names only) or empty list inside front matter
+        Dim att As Attachment, attName As String
+        If oMail.Attachments.Count > 0 Then
+            resultString = resultString & "attachments:" & vbCrLf
+            For Each att In oMail.Attachments
+                attName = att.fileName
+                attName = Replace(attName, """", "''")
+                resultString = resultString & "  - """ & attName & """" & vbCrLf
+            Next att
+        Else
+            resultString = resultString & "attachments: []" & vbCrLf
+        End If
 
-        ' End YAML block
-        resultString = resultString & "---" & vbCrLf & vbCrLf
-        
-        ' Add a Markdown task before the email body
-        resultString = resultString & "- [ ] " & temporarySubjectLineString & vbCrLf & vbCrLf
-
-        ' Add a horizontal rule for separation
-        resultString = resultString & "---" & vbCrLf & vbCrLf
-        
-        ' Add original email content
-        resultString = resultString & oMail.Body
+    ' End YAML block then blank line
+    resultString = resultString & "---" & vbCrLf & vbCrLf
+    ' Add a Markdown task before the email body
+    ' Add original email content
+    resultString = resultString & ConvertLinksToMarkdown(oMail.Body)
 
 
         ' Make a dummy email to hold the details we're saving
@@ -122,33 +128,36 @@ Sub ExtractEmail()
             Set outputItem = Application.CreateItem(olMailItem)
         outputItem.Body = resultString
 
-        ' Now we create the file name
-        fileName = emailFileNameStartChr
-        fileName = fileName & Format(dtDate, "yyyy-mm-dd", vbUseSystemDayOfWeek, vbUseSystem)
-        fileName = fileName & Format(dtDate, " hhMM", vbUseSystemDayOfWeek, vbUseSystem)
-        fileName = fileName & " " & temporarySubjectLineString & ".md"
+        ' Build improved filename for fuzzy search:
+        ' Format: <prefix><yyyy-MM-dd>_<HHNN> @Sender - Subject.md
+        ' Ensures: single underscore between date/time, single @, normalized sender spacing.
+        Dim dateToken As String: dateToken = Format(dtDate, "yyyy-MM-dd", vbUseSystemDayOfWeek, vbUseSystem)
+        Dim timeToken As String: timeToken = Format(dtDate, "HHNN", vbUseSystemDayOfWeek, vbUseSystem)
+        Dim senderToken As String: senderToken = sender
+        On Error Resume Next
+        ReplaceCharsForFileName senderToken, " "
+        On Error GoTo EndClean
+        senderToken = Replace(senderToken, "_", " ")
+        senderToken = CompressWhitespace(Trim$(senderToken))
+    ' Ensure exactly one leading @ before sender name in filename
+    If Left$(senderToken, 1) = "@" Then senderToken = Mid$(senderToken, 2)
+    senderToken = LTrim$(senderToken)
+        ' Truncate subject for filename if excessively long (keep search-friendly, avoid huge entries)
+        Dim subjectForFile As String
+        subjectForFile = temporarySubjectLineString
+        If Len(subjectForFile) > 60 Then
+            subjectForFile = Left$(subjectForFile, 60)
+        End If
+    fileName = emailFileNameStartChr & dateToken & "_" & timeToken & " @" & senderToken & " - " & subjectForFile & ".md"
 
-        ' Save the result
-        ' outputItem.SaveAs vaultPathToSaveFileTo & fileName, OLTXT
-        SaveAsUTF8 vaultPathToSaveFileTo & fileName, resultString
-        
-        ' ' Construct the Obsidian URI (must replace backslashes with `%5C` for Windows paths)
-        ' Dim obsidianURI As String
-        ' obsidianURI = "obsidian://open?path=" & Replace(vaultPathToSaveFileTo & fileName, "\", "%5C")
-        
-        ' ' Open the file in Obsidian
-        ' ShellExecute 0, "open", obsidianURI, vbNullString, vbNullString, 1
+    ' Save the result
+    ' outputItem.SaveAs vaultPathToSaveFileTo & fileName, OLTXT
+    SaveAsUTF8 vaultPathToSaveFileTo & fileName, resultString
 
-        ' Fully encode the file path for Obsidian URI
-        Dim obsidianURI As String
-        ' obsidianURI = "obsidian://open?path=" & URLEncode(vaultPathToSaveFileTo & fileName)
-        ' obsidianURI = "obsidian://open?path=" & UrlEncodeUtf8(vaultPathToSaveFileTo & fileName)
-        obsidianURI = "obsidian://open?path=" & UrlEncodeUtf8NoBom(vaultPathToSaveFileTo & fileName)
-
-
-
-        ' Use ShellExecute to open the note in Obsidian
-        ShellExecute 0, "open", obsidianURI, vbNullString, vbNullString, 1
+    ' Open the saved markdown file in Sublime Text instead of Obsidian.
+    ' Requires the 'subl' command line tool to be available in PATH.
+    ' We pass the full file path as a quoted parameter (ShellExecute handles argument string separately).
+    ShellExecute 0, "open", "subl", """" & vaultPathToSaveFileTo & fileName & """", vbNullString, 1
 
 
     Next
@@ -157,3 +166,61 @@ EndClean:
     Set oMail = Nothing
     Set outputItem = Nothing
 End Sub
+
+' Collapse multiple spaces into single spaces
+Private Function CompressWhitespace(ByVal s As String) As String
+    Dim i As Long, ch As String * 1, prevSpace As Boolean, outStr As String
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch = " " Then
+            If Not prevSpace Then outStr = outStr & ch
+            prevSpace = True
+        Else
+            outStr = outStr & ch
+            prevSpace = False
+        End If
+    Next i
+    CompressWhitespace = outStr
+End Function
+
+Private Function GetSenderSmtp(oMail As Outlook.MailItem) As String
+    On Error GoTo Fail
+    Dim addr As String
+    If oMail.SenderEmailType = "SMTP" Then
+        addr = oMail.SenderEmailAddress
+    ElseIf oMail.SenderEmailType = "EX" Then
+        Dim exchUser As Outlook.ExchangeUser
+        On Error Resume Next
+        Set exchUser = oMail.sender.GetExchangeUser
+        On Error GoTo Fail
+        If Not exchUser Is Nothing Then
+            addr = exchUser.PrimarySmtpAddress
+        End If
+        If Len(addr) = 0 Then
+            Dim pa As Outlook.PropertyAccessor
+            Set pa = oMail.PropertyAccessor
+            ' PR_SMTP_ADDRESS
+            addr = pa.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x39FE001E")
+        End If
+    End If
+    GetSenderSmtp = LCase$(addr)
+    Exit Function
+Fail:
+    GetSenderSmtp = ""
+End Function
+
+Private Function ConvertLinksToMarkdown(bodyText As String) As String
+    Dim result As String
+    result = bodyText
+    
+    ' Convert <http...> patterns to ["link"](http...)
+    Dim regex As Object
+    Set regex = CreateObject("VBScript.RegExp")
+    regex.Global = True
+    regex.Pattern = "<(http[^>]*)>"
+    result = regex.Replace(result, "[link](<$1>)")
+    
+    ConvertLinksToMarkdown = result
+End Function
+
+
