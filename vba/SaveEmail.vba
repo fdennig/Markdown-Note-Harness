@@ -8,7 +8,20 @@ Private Declare PtrSafe Function ShellExecute Lib "shell32.dll" Alias "ShellExec
     ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, _
     ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As Long
 Sub ExtractEmail()
-    ExtractEmailCore False, False
+    ' Auto-dispatch based on selected item type
+    Dim obj As Object
+    Set obj = Application.ActiveExplorer.Selection.Item(1)
+    Select Case obj.Class
+        Case 43 ' olMail
+            ExtractEmailCore False, False
+        Case 26 ' olAppointment
+            ExtractMeetingCore
+        Case 53 ' olMeetingItem (invitation in inbox)
+            ExtractMeetingCore
+        Case Else
+            MsgBox "ExtractEmail: unsupported item type (Class " & obj.Class & ")."
+    End Select
+    Set obj = Nothing
 End Sub
 
 Sub ExtractEmailToReply()
@@ -183,6 +196,128 @@ EndClean:
     Set obj = Nothing
     Set oMail = Nothing
     Set outputItem = Nothing
+End Sub
+
+Private Sub ExtractMeetingCore()
+
+    Dim vaultPathToSaveFileTo As String
+    Dim meetingFileNameStartChr As String
+    Dim personNameStartChar As String
+    config vaultPathToSaveFileTo, personNameStartChar, meetingFileNameStartChr:=meetingFileNameStartChr
+
+    Dim obj As Object
+    Dim oAppt As Outlook.AppointmentItem
+    On Error GoTo EndCleanMeeting:
+
+    Dim currentExplorer As Explorer
+        Set currentExplorer = Application.ActiveExplorer
+    Dim Selection As Selection
+        Set Selection = currentExplorer.Selection
+
+    For Each obj In Selection
+        ' Handle both calendar appointments (Class 26) and inbox meeting items (Class 53)
+        If obj.Class = 53 Then
+            Set oAppt = obj.GetAssociatedAppointment(False)
+        ElseIf obj.Class = 26 Then
+            Set oAppt = obj
+        Else
+            MsgBox "This code only works with Meetings/Appointments."
+            GoTo EndCleanMeeting:
+        End If
+
+        ' Clean subject for filename
+        Dim temporarySubjectLineString As String
+        temporarySubjectLineString = oAppt.Subject
+        ReplaceCharsForFileName temporarySubjectLineString, ""
+
+        ' Build required attendees list
+        Dim recips As Outlook.Recipients
+            Set recips = oAppt.Recipients
+        Dim recip As Outlook.Recipient
+        Dim reqAttendees As String: reqAttendees = ""
+        Dim optAttendees As String: optAttendees = ""
+
+        For Each recip In recips
+            If recip.Type = olRequired Then
+                reqAttendees = reqAttendees & "  - """ & formatName(recip.Name, personNameStartChar) & """" & vbCrLf
+            ElseIf recip.Type = olOptional Then
+                optAttendees = optAttendees & "  - """ & formatName(recip.Name, personNameStartChar) & """" & vbCrLf
+            End If
+        Next
+
+        ' Build YAML frontmatter
+        Dim resultString As String
+        resultString = "---" & vbCrLf
+        resultString = resultString & "class: meeting" & vbCrLf
+        resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf
+        resultString = resultString & "date: " & Format(oAppt.Start, "yyyy-MM-dd HH:mm") & vbCrLf
+        resultString = resultString & "end: " & Format(oAppt.End, "yyyy-MM-dd HH:mm") & vbCrLf
+        resultString = resultString & "duration: " & oAppt.Duration & vbCrLf
+
+        Dim locationStr As String
+        locationStr = oAppt.Location
+        If Len(locationStr) > 0 Then
+            locationStr = Replace(locationStr, """", "''")
+            resultString = resultString & "location: """ & locationStr & """" & vbCrLf
+        Else
+            resultString = resultString & "location: " & vbCrLf
+        End If
+
+        resultString = resultString & "organizer: """ & formatName(oAppt.Organizer, personNameStartChar) & """" & vbCrLf
+
+        ' Attendees
+        If Len(reqAttendees) > 0 Then
+            resultString = resultString & "attendees:" & vbCrLf & reqAttendees
+        Else
+            resultString = resultString & "attendees: []" & vbCrLf
+        End If
+
+        If Len(optAttendees) > 0 Then
+            resultString = resultString & "optional_attendees:" & vbCrLf & optAttendees
+        Else
+            resultString = resultString & "optional_attendees: []" & vbCrLf
+        End If
+
+        resultString = resultString & "tags:" & vbCrLf
+
+        ' Attachments
+        Dim att As Attachment, attName As String
+        If oAppt.Attachments.Count > 0 Then
+            resultString = resultString & "attachments:" & vbCrLf
+            For Each att In oAppt.Attachments
+                attName = att.fileName
+                attName = Replace(attName, """", "''")
+                resultString = resultString & "  - """ & attName & """" & vbCrLf
+            Next att
+        Else
+            resultString = resultString & "attachments: []" & vbCrLf
+        End If
+
+        resultString = resultString & "---" & vbCrLf & vbCrLf
+
+        ' Body
+        resultString = resultString & ConvertLinksToMarkdown(oAppt.Body)
+
+        ' Build filename: M <yyyy-MM-dd>_<HHNN> - Subject.md
+        Dim dtDate As Date: dtDate = oAppt.Start
+        Dim dateToken As String: dateToken = Format(dtDate, "yyyy-MM-dd")
+        Dim timeToken As String: timeToken = Format(dtDate, "HHNN")
+        Dim subjectForFile As String: subjectForFile = temporarySubjectLineString
+        If Len(subjectForFile) > 60 Then subjectForFile = Left$(subjectForFile, 60)
+
+        Dim fileName As String
+        fileName = meetingFileNameStartChr & dateToken & "_" & timeToken & " - " & subjectForFile & ".md"
+
+        ' Save
+        SaveAsUTF8 vaultPathToSaveFileTo & fileName, resultString
+
+        ' Open in Sublime Text
+        ShellExecute 0, "open", "subl", """" & vaultPathToSaveFileTo & fileName & """", vbNullString, 1
+
+    Next
+EndCleanMeeting:
+    Set obj = Nothing
+    Set oAppt = Nothing
 End Sub
 
 ' Collapse multiple spaces into single spaces

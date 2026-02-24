@@ -50,7 +50,7 @@ Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String
     ' This is the beginning of the Meeting file name and the H1 heading inside the file
     ' You need to leave a space in this if you want the name to appear like it does above
     ' ex: "M 2021-03-27 1347 Meeting Subject Here"
-    meetingFileNameStartChr = "M "
+    meetingFileNameStartChr = "Meeting_"
     '================================================'
     ' This is the beginning of the Training file name and the H1 heading inside the file
     ' You need to leave a space in this if you want the name to appear like it does above
