@@ -376,4 +376,144 @@ Private Function ConvertLinksToMarkdown(bodyText As String) As String
     ConvertLinksToMarkdown = result
 End Function
 
+'======================================================================================='
+' SEND + SAVE
+'  Run this from an OPEN COMPOSE WINDOW (Inspector). It writes the outgoing message as a
+'  Markdown note (same layout as ExtractEmail) and then sends it, so one click both files
+'  and sends the email. Hook it to a button on the compose window's Quick Access Toolbar.
+'======================================================================================='
+Sub SendAndSaveEmail()
+
+    Dim vaultPathToSaveFileTo As String
+    Dim personNameStartChar As String
+    Dim sentFileNameStartChr As String
+    config vaultPathToSaveFileTo, personNameStartChar, sentFileNameStartChr:=sentFileNameStartChr
+    If Len(sentFileNameStartChr) = 0 Then sentFileNameStartChr = "Sent_"
+
+    On Error GoTo EndCleanSend
+
+    ' Grab the message currently being composed
+    If TypeName(Application.ActiveInspector) = "Nothing" Then
+        MsgBox "Open the email you want to send in its own window first, then run SendAndSaveEmail."
+        Exit Sub
+    End If
+
+    Dim oMail As Outlook.MailItem
+    Set oMail = Application.ActiveInspector.CurrentItem
+    If oMail.Class <> 43 Then
+        MsgBox "This only works with email messages."
+        Exit Sub
+    End If
+
+    ' Resolve names/addresses before we read them
+    oMail.Recipients.ResolveAll
+
+    ' --- capture every field BEFORE sending (the object is invalid after .Send) ---
+    Dim temporarySubjectLineString As String
+    temporarySubjectLineString = oMail.Subject
+    ReplaceCharsForFileName temporarySubjectLineString, ""
+
+    ' A draft has no SentOn yet, so stamp the moment we send
+    Dim dtDate As Date
+    dtDate = Now
+
+    Dim sender As String
+    sender = formatName(Application.Session.CurrentUser.Name, personNameStartChar)
+
+    Dim recips As Outlook.Recipients
+        Set recips = oMail.Recipients
+    Dim recip As Outlook.Recipient
+
+    ' --- build YAML frontmatter (mirrors ExtractEmailCore) ---
+    Dim resultString As String
+    resultString = "---" & vbCrLf
+    resultString = resultString & "class: email" & vbCrLf
+    resultString = resultString & "sent: true" & vbCrLf
+    resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf
+    resultString = resultString & "date: " & Format(dtDate, "yyyy-MM-dd HH:mm") & vbCrLf
+    resultString = resultString & "from: """ & sender & """" & vbCrLf
+
+    Dim myEmail As String
+    myEmail = GetCurrentUserSmtp()
+    If Len(myEmail) > 0 Then
+        resultString = resultString & "from_email: """ & myEmail & """" & vbCrLf
+    End If
+
+    ' Recipients as a YAML list
+    resultString = resultString & "to:" & vbCrLf
+    For Each recip In recips
+        resultString = resultString & "  - """ & formatName(recip.Name, personNameStartChar) & """" & vbCrLf
+    Next
+
+    resultString = resultString & "tags:" & vbCrLf
+
+    ' Attachments
+    Dim att As Attachment, attName As String
+    If oMail.Attachments.Count > 0 Then
+        resultString = resultString & "attachments:" & vbCrLf
+        For Each att In oMail.Attachments
+            attName = Replace(att.fileName, """", "''")
+            resultString = resultString & "  - """ & attName & """" & vbCrLf
+        Next att
+    Else
+        resultString = resultString & "attachments: []" & vbCrLf
+    End If
+
+    resultString = resultString & "---" & vbCrLf & vbCrLf
+    resultString = resultString & ConvertLinksToMarkdown(oMail.Body)
+
+    ' --- filename: <prefix><yyyy-MM-dd>_<HHNN> @<first recipient> - <subject>.md ---
+    ' Outgoing mail is keyed on the recipient (the sender is always you)
+    Dim dateToken As String: dateToken = Format(dtDate, "yyyy-MM-dd")
+    Dim timeToken As String: timeToken = Format(dtDate, "HHNN")
+
+    Dim toToken As String
+    If recips.Count > 0 Then
+        toToken = recips.Item(1).Name
+    Else
+        toToken = "no recipient"
+    End If
+    On Error Resume Next
+    ReplaceCharsForFileName toToken, " "
+    On Error GoTo EndCleanSend
+    toToken = CompressWhitespace(Trim$(Replace(toToken, "_", " ")))
+    If Left$(toToken, 1) = "@" Then toToken = LTrim$(Mid$(toToken, 2))
+
+    Dim subjectForFile As String
+    subjectForFile = temporarySubjectLineString
+    If Len(subjectForFile) > 60 Then subjectForFile = Left$(subjectForFile, 60)
+
+    Dim fileName As String
+    fileName = sentFileNameStartChr & dateToken & "_" & timeToken & " @" & toToken & " - " & subjectForFile & ".md"
+
+    ' --- save the note FIRST, then send the mail ---
+    SaveAsUTF8 vaultPathToSaveFileTo & fileName, resultString
+    oMail.Send
+
+    ' Open the saved markdown file in Sublime Text (same as ExtractEmail).
+    ' Requires the 'subl' command line tool to be available in PATH.
+    ShellExecute 0, "open", "subl", """" & vaultPathToSaveFileTo & fileName & """", vbNullString, 1
+
+    Exit Sub
+EndCleanSend:
+    MsgBox "SendAndSaveEmail failed: " & Err.Description & vbCrLf & _
+           "(The email was NOT sent if you see this before it left.)"
+    Set oMail = Nothing
+End Sub
+
+' SMTP address of the signed-in user, for the from_email field on sent notes
+Private Function GetCurrentUserSmtp() As String
+    On Error GoTo Fail
+    Dim ae As Outlook.AddressEntry
+    Set ae = Application.Session.CurrentUser.AddressEntry
+    If ae.Type = "EX" Then
+        GetCurrentUserSmtp = LCase$(ae.GetExchangeUser.PrimarySmtpAddress)
+    Else
+        GetCurrentUserSmtp = LCase$(ae.Address)
+    End If
+    Exit Function
+Fail:
+    GetCurrentUserSmtp = ""
+End Function
+
 

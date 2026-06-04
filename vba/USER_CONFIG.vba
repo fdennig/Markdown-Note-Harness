@@ -1,7 +1,7 @@
 Attribute VB_Name = "USER_CONFIG"
 Option Explicit
 
-Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String, Optional emailFileNameStartChr As String, Optional emailTypeLink As String, Optional attachmentPath As String, Optional meetingFileNameStartChr As String, Optional meetingTypeLink As String, Optional trainingFileNameStartChr As String, Optional trainingTypeLink As String, Optional contactFileNameStartChr As String, Optional contactTypeLink As String)
+Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String, Optional emailFileNameStartChr As String, Optional emailTypeLink As String, Optional attachmentPath As String, Optional meetingFileNameStartChr As String, Optional meetingTypeLink As String, Optional trainingFileNameStartChr As String, Optional trainingTypeLink As String, Optional contactFileNameStartChr As String, Optional contactTypeLink As String, Optional sentFileNameStartChr As String)
     
     '    Public Sub config(
     '                  vaultPathToSaveFileTo As String
@@ -42,6 +42,11 @@ Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String
     ' You need to leave a space in this if you want the name to appear like it does above
     ' ex: "E 2021-03-27 1347 Email Subject line here"
     emailFileNameStartChr = "Email_"
+    '================================================'
+    ' This is the beginning of the file name for emails you SEND with SendAndSaveEmail
+    ' Keeping a distinct prefix lets you tell outgoing notes apart from received ones
+    ' ex: "Sent_2021-03-27_1347 @Recipient - Subject"
+    sentFileNameStartChr = "Sent_"
     '================================================'
     ' Path where attachments are saved when using ExtractEmailWithAttachments
     ' !IMPORTANT! make sure you have a trailing backslash at the end of the path `\`
