@@ -11,6 +11,9 @@ When run from an open compose window, the macro:
 
 1. Reads the draft (subject, body, recipients, attachments) and resolves recipient names.
 2. Builds a Markdown note with YAML frontmatter:
+   - `toreply: `
+   - `personal: `
+   - `priority: `
    - `class: email`
    - `sent: true` — lets you filter outgoing notes in Obsidian
    - `subject`, `date` (send time), `from` / `from_email` (you), `to:` list, `tags:`, `attachments`

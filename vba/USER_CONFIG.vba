@@ -1,7 +1,7 @@
 Attribute VB_Name = "USER_CONFIG"
 Option Explicit
 
-Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String, Optional emailFileNameStartChr As String, Optional emailTypeLink As String, Optional attachmentPath As String, Optional meetingFileNameStartChr As String, Optional meetingTypeLink As String, Optional trainingFileNameStartChr As String, Optional trainingTypeLink As String, Optional contactFileNameStartChr As String, Optional contactTypeLink As String, Optional sentFileNameStartChr As String)
+Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String, Optional emailFileNameStartChr As String, Optional emailTypeLink As String, Optional attachmentPath As String, Optional meetingFileNameStartChr As String, Optional meetingTypeLink As String, Optional trainingFileNameStartChr As String, Optional trainingTypeLink As String, Optional contactFileNameStartChr As String, Optional contactTypeLink As String, Optional sentFileNameStartChr As String, Optional personalVaultPathToSaveFileTo As String)
     
     '    Public Sub config(
     '                  vaultPathToSaveFileTo As String
@@ -22,6 +22,7 @@ Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String
     ' Make sure this is the absolute path where you want your files to be sent to
     ' !IMPORTANT! make sure you have a trailing backslash at the end of the path `\`
     vaultPathToSaveFileTo = "C:\Users\francis.dennig\OneDrive - United Nations Development Programme\UNDPnotes\emails\"
+    personalVaultPathToSaveFileTo = "C:\Users\francis.dennig\OneDrive\FRANCISnotesANDcheatsheets\notes\personal notes\emails\"
     '================================================'
     ' This is what is added to the links inside the produced documents for people
     ' so it would look like:

@@ -13,7 +13,7 @@ Sub ExtractEmail()
     Set obj = Application.ActiveExplorer.Selection.Item(1)
     Select Case obj.Class
         Case 43 ' olMail
-            ExtractEmailCore False, False
+            ExtractEmailCore False, False, False, ""
         Case 26 ' olAppointment
             ExtractMeetingCore
         Case 53 ' olMeetingItem (invitation in inbox)
@@ -25,21 +25,37 @@ Sub ExtractEmail()
 End Sub
 
 Sub ExtractEmailToReply()
-    ExtractEmailCore True, False
+    ExtractEmailCore True, False, False, ""
 End Sub
 
 Sub ExtractEmailWithAttachments()
-    ExtractEmailCore False, True
+    ExtractEmailCore False, True, False, ""
 End Sub
 
-Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean)
+Sub ExtractEmailPersonal()
+    ExtractEmailCore False, False, True, ""
+End Sub
+
+Sub ExtractEmailHighPriority()
+    ExtractEmailCore False, False, False, "high"
+End Sub
+
+Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Optional isPersonal As Boolean = False, Optional priority As String = "")
 
     Dim vaultPathToSaveFileTo As String
+    Dim personalVaultPathToSaveFileTo As String
     Dim emailFileNameStartChr As String
     Dim emailTypeLink As String
     Dim personNameStartChar As String
     Dim attachmentPath As String
-    config vaultPathToSaveFileTo, personNameStartChar, emailFileNameStartChr, emailTypeLink, attachmentPath
+    config vaultPathToSaveFileTo, personNameStartChar, emailFileNameStartChr, emailTypeLink, attachmentPath, personalVaultPathToSaveFileTo:=personalVaultPathToSaveFileTo
+
+    Dim targetVaultPath As String
+    If isPersonal And Len(personalVaultPathToSaveFileTo) > 0 Then
+        targetVaultPath = personalVaultPathToSaveFileTo
+    Else
+        targetVaultPath = vaultPathToSaveFileTo
+    End If
 
     '================================================'
     ' Save as plain text
@@ -106,6 +122,8 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean)
         ' Start YAML frontmatter
         resultString = "---" & vbCrLf
         resultString = resultString & "toreply: " & IIf(toReply, "true", "") & vbCrLf
+        resultString = resultString & "personal: " & IIf(isPersonal, "true", "") & vbCrLf
+        resultString = resultString & "priority: " & priority & vbCrLf
         resultString = resultString & "class: email" & vbCrLf
     resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf
         resultString = resultString & "date: " & Format(oMail.ReceivedTime, "yyyy-MM-dd HH:mm") & vbCrLf
@@ -173,7 +191,7 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean)
     fileName = emailFileNameStartChr & dateToken & "_" & timeToken & " @" & senderToken & " - " & subjectForFile & ".md"
 
     ' Save the result
-    SaveAsUTF8 vaultPathToSaveFileTo & fileName, resultString
+    SaveAsUTF8 targetVaultPath & fileName, resultString
 
     ' Save attachments to disk if requested
     If saveAttachments And oMail.Attachments.Count > 0 Then
@@ -188,7 +206,7 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean)
     ' Open the saved markdown file in Sublime Text instead of Obsidian.
     ' Requires the 'subl' command line tool to be available in PATH.
     ' We pass the full file path as a quoted parameter (ShellExecute handles argument string separately).
-    ShellExecute 0, "open", "subl", """" & vaultPathToSaveFileTo & fileName & """", vbNullString, 1
+    ShellExecute 0, "open", "subl", """" & targetVaultPath & fileName & """", vbNullString, 1
 
 
     Next
@@ -427,6 +445,9 @@ Sub SendAndSaveEmail()
     ' --- build YAML frontmatter (mirrors ExtractEmailCore) ---
     Dim resultString As String
     resultString = "---" & vbCrLf
+    resultString = resultString & "toreply: " & vbCrLf
+    resultString = resultString & "personal: " & vbCrLf
+    resultString = resultString & "priority: " & vbCrLf
     resultString = resultString & "class: email" & vbCrLf
     resultString = resultString & "sent: true" & vbCrLf
     resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf

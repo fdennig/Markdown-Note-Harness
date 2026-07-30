@@ -3,10 +3,16 @@
 This project automates saving Outlook emails as **Markdown notes** in an **Obsidian vault**, inspired by [Obsidian-For-Business](https://github.com/tallguyjenks/Obsidian-For-Business).
 
 ## 🚀 Features
-✅ Extracts emails as **Markdown** with structured **YAML frontmatter**  
+✅ Extracts emails as **Markdown** with structured **YAML frontmatter** (`toreply`, `personal`, `priority`, `class`, `subject`, `date`, `from`, `to`, `attachments`)  
 ✅ Saves emails **directly to your Obsidian vault**  
 ✅ Task integration: Adds `- [ ] email title` at the top of the note  
-✅ **Automatically opens** the newly created note in **Obsidian**  
+✅ **Macro Variants**:
+   - `ExtractEmail`: Standard email export (`toreply: `, `personal: `, `priority: `)
+   - `ExtractEmailToReply`: Sets `toreply: true`
+   - `ExtractEmailWithAttachments`: Saves attachments to local folder and links them
+   - `ExtractEmailPersonal`: Sets `personal: true`
+   - `ExtractEmailHighPriority`: Sets `priority: high`
+✅ **Automatically opens** the newly created note in your editor  
 
 
 ## 📂 Installation
