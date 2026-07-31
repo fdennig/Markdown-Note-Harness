@@ -4,7 +4,7 @@
     <key>name</key>
     <string>Symbol List: TODO Items</string>
     <key>scope</key>
-    <string>entity.name.tag.todo.unchecked.markdown.line</string>
+    <string>entity.name.tag.todo.open.markdown, entity.name.tag.todo.urgent.markdown</string>
     <key>settings</key>
     <dict>
         <key>showInSymbolList</key>

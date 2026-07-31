@@ -42,12 +42,25 @@ contexts:
     # which is exactly what you want (they won't get your symbol scope).
 
   todo-item-unchecked:
-    # 1. Apply Symbol Scope
-    - meta_scope: entity.name.tag.todo.unchecked.markdown.line
-    # 2. End at newline
+    - match: '!\s'
+      push: todo-item-urgent
+      pop: true
     - match: $
       pop: true
-    # 3. CRITICAL: Allow Wikilinks/Bold/Italic inside the TODO line
+    - match: ''
+      push: todo-item-normal
+      pop: true
+
+  todo-item-normal:
+    - meta_scope: entity.name.tag.todo.open.markdown
+    - match: $
+      pop: true
+    - include: scope:text.html.markdown#inlines
+
+  todo-item-urgent:
+    - meta_scope: entity.name.tag.todo.urgent.markdown
+    - match: $
+      pop: true
     - include: scope:text.html.markdown#inlines
 
   
