@@ -623,31 +623,47 @@ def process_resolutions(window):
 
     # 3. SCAN ACTIVE LINES FOR CHECKS AND INBOX-ONLY TODOS
     # Pattern for checked: - [x] Text [[DisplayName]]?
-    check_pattern = re.compile(r"^\s*[-*+]\s*\[[xX]\]\s*(.*?)((\[\[(.*?)\]\]))?\s*$")
-    # Simplified pattern for inbox-only: - [ ] Text (NO wikilink at end)
-    unchecked_pattern = re.compile(r"^\s*[-*+]\s*\[\s*\]\s*([^\[]+)$")
+    # Uses greedy (.*) so that the LAST [[...]] is captured as the source link
+    check_pattern = re.compile(r"^\s*[-*+]\s*\[[xX]\]\s*(.*)\s+\[\[([^\]]*)\]\]\s*$")
+    # Fallback for checked with no trailing wikilink
+    check_pattern_no_link = re.compile(r"^\s*[-*+]\s*\[[xX]\]\s*(.+?)\s*$")
+    # Simplified pattern for unchecked: - [ ] Text (trailing wikilink filtered in code below)
+    unchecked_pattern = re.compile(r"^\s*[-*+]\s*\[\s*\]\s*(.+?)\s*$")
     
     resolved_in_report = [] 
     inbox_only_todos = []
     
     for line in active_lines:
-        # Check for resolved items
+        # Check for resolved items (with trailing source wikilink)
         match_checked = check_pattern.match(line)
         if match_checked:
             raw_text = match_checked.group(1).strip()
-            display_name = match_checked.group(4) # "Note" from [[Note]]
-            
+            display_name = match_checked.group(2)  # "Note" from [[Note]]
+
             resolved_in_report.append({
-                "text": raw_text, 
-                "display_name": display_name 
+                "text": raw_text,
+                "display_name": display_name
             })
             continue
-        
+
+        # Check for resolved items (no trailing wikilink - inbox-only)
+        match_checked_no_link = check_pattern_no_link.match(line)
+        if match_checked_no_link:
+            raw_text = match_checked_no_link.group(1).strip()
+
+            resolved_in_report.append({
+                "text": raw_text,
+                "display_name": None
+            })
+            continue
+
         # Check for inbox-only unchecked todos (simplified regex)
         match_unchecked = unchecked_pattern.match(line)
         if match_unchecked:
             text_content = match_unchecked.group(1).strip()
-            inbox_only_todos.append(text_content)
+            # Skip lines with trailing wikilink (handled by unchecked_with_source_pattern)
+            if not re.search(r"\[\[[^\]]*\]\]\s*$", line):
+                inbox_only_todos.append(text_content)
 
     # LOAD DATABASE
     db = load_db(yml_path)
@@ -692,7 +708,7 @@ def process_resolutions(window):
 
     # 4B. HANDLE URGENCY UPDATES FOR SOURCE-FILE TODOS
     # Pattern for unchecked with wikilink: - [ ] Text [[DisplayName]]
-    unchecked_with_source_pattern = re.compile(r"^\s*[-*+]\s*\[\s*\]\s*(.*?)\s*\[\[(.*?)\]\]\s*$")
+    unchecked_with_source_pattern = re.compile(r"^\s*[-*+]\s*\[\s*\]\s*(.*)\s+\[\[([^\]]*)\]\]\s*$")
 
     for line in active_lines:
         match = unchecked_with_source_pattern.match(line)
