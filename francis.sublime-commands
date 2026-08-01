@@ -28,5 +28,19 @@
         {
       "caption": "Reply to email",
       "command": "reply_to_email"
+    },
+    {
+      "caption": "Email: Browse",
+      "command": "browse_emails"
+    },
+    {
+      "caption": "Email: Browse to-reply",
+      "command": "open_frontmatter_symbol",
+      "args": { "symbol": "toreply_note", "label": "to-reply", "pick": true }
+    },
+    {
+      "caption": "Email: Open all to-reply",
+      "command": "open_frontmatter_symbol",
+      "args": { "symbol": "toreply_note", "label": "to-reply", "pick": false }
     }
 ]
