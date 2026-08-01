@@ -40,12 +40,17 @@ contexts:
         3: comment.line.number-sign.yaml
       scope: meta.email.sender-email-line.yaml
 
-    # Simple boolean flag line.
-    - match: ^\s*(toreply)(\s*:\s*)(true)\s*$
+    # Frontmatter flags, scoped as whole 'key: value' pairs rather than as the
+    # key or the value alone. Symbol List - Email Flags.tmPreferences indexes
+    # this scope and rewrites each pair into its own token (toreply_note,
+    # email_note, ...), which is what window.symbol_locations() looks up.
+    #
+    # Values are pinned, so the macro's empty 'toreply: ', 'personal: ' and
+    # 'priority: ' lines never match and never reach the index. Keep this list
+    # and the transformation list in the .tmPreferences in step.
+    - match: ^\s*((?:toreply|personal|sent)\s*:\s*true|priority\s*:\s*high|class\s*:\s*(?:email|meeting))\s*$
       captures:
-        1: entity.name.email.toreply.yaml
-        2: punctuation.separator.key-value.yaml
-        3: constant.language.boolean.true.yaml
+        1: entity.name.email.flag.yaml
 
     # Attachments key and its list items
     - match: ^(attachments)\s*:\s*(\[.*\])?\s*$

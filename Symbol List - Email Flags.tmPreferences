@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>name</key><string>Email Flag Symbols</string>
+    <key>scope</key>
+    <!-- Assigned in YAMLEmailFrontmatter.sublime-syntax to whole 'key: value'
+         pairs, so the text reaching the transformation below is e.g.
+         "toreply: true". -->
+    <string>entity.name.email.flag.yaml</string>
+
+    <key>settings</key>
+    <dict>
+        <!-- Indexed only: these are for project-wide lookup (ctrl+shift+R) and
+             window.symbol_locations(), not the per-file symbol list. -->
+        <key>showInSymbolList</key><integer>0</integer>
+        <key>showInIndexedSymbolList</key><integer>1</integer>
+
+        <!-- Rewrite each pair into its own unambiguous token. The index stores
+             the TRANSFORMED name, so these are the names to look up.
+             Without this the symbols would be raw values like "high" or
+             "email", which can collide with identically named symbols indexed
+             from other files: symbol lookup matches on name alone and offers
+             no scope filter. Every pair the syntax rule matches has a line
+             here; anything missing falls through under its raw text. -->
+        <key>symbolIndexTransformation</key>
+        <string><![CDATA[
+            s/^toreply\s*:\s*true$/toreply_note/;
+            s/^personal\s*:\s*true$/personal_note/;
+            s/^sent\s*:\s*true$/sent_note/;
+            s/^priority\s*:\s*high$/priority_note/;
+            s/^class\s*:\s*email$/email_note/;
+            s/^class\s*:\s*meeting$/meeting_note/;
+        ]]></string>
+    </dict>
+</dict>
+</plist>
