@@ -35,6 +35,27 @@ A Sublime Text 4 package (lives in `Packages/francis_sublime_package/`) that ext
 - `Symbol List - ToDos.tmPreferences` — makes unchecked todos appear in Sublime's symbol index (used by TodoSync to discover todos via `view.indexed_symbol_regions()`).
 - `Symbol List - Email Flags.tmPreferences` — indexes email frontmatter flags. The syntax scopes whole `key: value` pairs as `entity.name.email.flag.yaml`; this file's `symbolIndexTransformation` rewrites each pair into its own token: `toreply_note`, `personal_note`, `sent_note`, `priority_note`, `email_note`, `meeting_note`. Those tokens — not the raw keys or values — are what `window.symbol_locations()` looks up.
 
+**Outlook macros (`outlook_macros/`):**
+
+VBA that runs inside Outlook, not inside Sublime. It is the *producer* of every email note the plugin consumes, so the two halves live together — but nothing here is loaded or executed by Sublime. Editing a `.vba` file changes nothing until it is pasted into Outlook's VBE (Alt+F11) and the module is re-imported.
+
+- `vba/SaveEmail.vba` — `ExtractEmail`, `ExtractEmailToReply`, `ExtractEmailWithAttachments`, `ExtractEmailPersonal`, `ExtractEmailHighPriority` all funnel into `ExtractEmailCore(toReply, saveAttachments, isPersonal, priority)`; `ExtractMeetingCore` handles appointments and `SendAndSaveEmail` sends outgoing mail and archives it with `sent: true`.
+- `vba/SaveUtilities.vba` — filename sanitising (`ReplaceCharsForFileName`), `formatName` (wraps people as `[[@Name]]`), and `SaveAsUTF8`, which writes a **BOM** — hence `read_frontmatter` opening files as `utf-8-sig`.
+- `vba/USER_CONFIG.vba` — vault paths and filename prefixes. Contains machine-specific absolute paths.
+
+Imported with `git subtree` from `https://github.com/fdennig/outlook2markdown.git` (itself a fork of machado-t/Outlook2Obsidian, MIT — `outlook_macros/LICENSE` must stay with the code). To sync either way:
+
+```
+git subtree pull --prefix=outlook_macros https://github.com/fdennig/outlook2markdown.git main
+git subtree push --prefix=outlook_macros https://github.com/fdennig/outlook2markdown.git main
+```
+
+**The macro/plugin contract** — change one side and the other breaks silently:
+
+- Frontmatter values are pinned in `YAMLEmailFrontmatter.sublime-syntax`, so the macro's exact spellings matter: `toreply: true`, `personal: true`, `sent: true`, `priority: high`, `class: email`, `class: meeting`. `ExtractEmailCore` writes `toreply: `, `personal: ` and `priority: ` *empty* when the flag is off — those lines deliberately fail to match and never reach the symbol index.
+- Filenames are `<prefix><yyyy-MM-dd>_<HHNN> @<sender> - <subject>.md`, meetings omitting ` @<sender>`. `EMAIL_FILENAME_RE` in `francis.py` parses this and is the reason email discovery opens no files. Changing the prefix is safe (the regex anchors on the date token); changing the separators is not.
+- `read_entry_fields` reads `from`/`sender`, `subject` and `date` from frontmatter as the fallback for names that don't match.
+
 ## Key Design Details
 
 - TodoSync identifies todos by their text content (the `text` field is the unique key). Duplicate detection checks both `open_todos` and `resolved_todos` lists.
@@ -51,6 +72,7 @@ A Sublime Text 4 package (lives in `Packages/francis_sublime_package/`) that ext
 ## Development Notes
 
 - No build system or tests — this is a Sublime Text package loaded directly from the `Packages/` directory.
+- Sublime only auto-loads plugins from a package's **root**; `.py` in a subdirectory is importable but never loaded (MarkdownEditing keeps a root `plugin.py` that imports `plugins/`). `.sublime-keymap`, `.sublime-commands`, `.sublime-settings` and `.sublime-menu` are likewise read from the root only. But `.sublime-syntax`, `.tmLanguage` and `.tmPreferences` are found **recursively** — so never add one under `outlook_macros/`, since a stray symbol-list file would inject names into the index that `window.symbol_locations()` could confuse with the `_note` tokens.
 - To reload after changes: save the `.py` file and Sublime Text auto-reloads the plugin. Check the Sublime console (`Ctrl+~`) for errors.
 - All print/log output goes to the Sublime console. TodoSync also writes to `Data/Logs/TodoSync.log`.
 - The codebase targets Python 3.8 (Sublime Text's embedded Python). Use `str.format()` instead of f-strings.
