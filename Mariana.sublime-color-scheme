@@ -363,7 +363,7 @@
         },
         {
             "name": "Todo inline links",
-            "scope": "entity.name.tag.todo markup.underline.link, entity.name.tag.todo string.other.link, entity.name.tag.todo meta.link.reference.wiki",
+            "scope": "entity.name.tag.todo markup.underline.link, entity.name.tag.todo string.other.link, entity.name.tag.todo meta.link.reference.wiki, entity.name.tag.todo meta.link.inline.description",
             "foreground": "var(blue)"
         },
 
