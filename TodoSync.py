@@ -157,6 +157,101 @@ def is_urgent(text):
     return text.strip().startswith('!')
 
 # ------------------------------
+# Core Logic: Resolve from Source
+# ------------------------------
+
+def resolve_checked_in_source(window, view):
+    """
+    Scan a source file view for checked todos (- [x]) that match open entries
+    in the database. Resolves them in the DB (but does NOT modify the source file,
+    since the user already checked the box there).
+    """
+    file_path = view.file_name()
+    if not file_path or not file_path.lower().endswith(MARKDOWN_EXT):
+        return 0
+
+    for ex in EXCLUDE_FOLDERS:
+        if ex in file_path.replace("\\", "/"):
+            return 0
+
+    yml_path, md_path = get_paths(window)
+    if not yml_path:
+        return 0
+
+    if file_path == md_path:
+        return 0
+
+    parent_folder = get_parent_folder(window)
+    if not parent_folder:
+        return 0
+
+    rel_path = os.path.relpath(file_path, parent_folder)
+    rel_path_no_ext = os.path.splitext(rel_path)[0]
+
+    db = load_db(yml_path)
+    open_todos = db.get("open_todos", [])
+    resolved_db_list = db.get("resolved_todos", [])
+
+    # Get open todos for this file
+    file_todos = [t for t in open_todos if t.get('filepath') == rel_path_no_ext]
+    if not file_todos:
+        return 0
+
+    # Read view content and find all checked items
+    content = view.substr(sublime.Region(0, view.size()))
+    checked_pattern = re.compile(r"^\s*[-*+]\s*\[[xX]\]\s*(.+?)\s*$", re.MULTILINE)
+    checked_texts = set()
+    for m in checked_pattern.finditer(content):
+        checked_texts.add(m.group(1).strip())
+
+    if not checked_texts:
+        return 0
+
+    # Match checked texts against open todos for this file
+    newly_resolved = []
+    for todo in file_todos:
+        todo_text = todo['text']
+        # Check both the exact text and the text without urgency prefix
+        text_to_match = todo_text
+        if todo_text.startswith('!'):
+            text_to_match = todo_text[1:].strip()
+            # Also check with the ! prefix as it appears in the file
+            if todo_text in checked_texts or text_to_match in checked_texts:
+                newly_resolved.append(todo)
+        else:
+            if text_to_match in checked_texts:
+                newly_resolved.append(todo)
+
+    if not newly_resolved:
+        return 0
+
+    # Move matched todos from open to resolved
+    resolved_texts = set()
+    for todo in newly_resolved:
+        is_dupe = False
+        for r in resolved_db_list:
+            if r['text'] == todo['text'] and r.get('filepath') == todo.get('filepath'):
+                is_dupe = True
+                break
+
+        if not is_dupe:
+            resolved_db_list.append({
+                "text": todo['text'],
+                "filepath": todo.get('filepath'),
+                "created_at": todo.get('created_at', get_current_date()),
+                "resolved_at": get_current_date()
+            })
+        resolved_texts.add(todo['text'])
+
+    open_todos = [t for t in open_todos if t['text'] not in resolved_texts]
+    db["open_todos"] = open_todos
+    db["resolved_todos"] = resolved_db_list
+    save_db(yml_path, db)
+
+    print("TodoSync: Resolved {} todos from source file {}".format(len(newly_resolved), rel_path_no_ext))
+    return len(newly_resolved)
+
+# ------------------------------
 # Core Logic: Sync View -> YAML
 # ------------------------------
 
@@ -799,8 +894,11 @@ class TodoSyncListener(sublime_plugin.EventListener):
                 finally:
                     self._processing_todo = False
                 return
-        
+
         sync_view_to_yaml(w, view)
+        resolved_count = resolve_checked_in_source(w, view)
+        if resolved_count > 0:
+            self._refresh_report(w)
 
     def on_pre_close(self, view):
         file_path = view.file_name()
@@ -808,6 +906,19 @@ class TodoSyncListener(sublime_plugin.EventListener):
             w = view.window()
             if w:
                 sync_view_to_yaml(w, view)
+                resolved_count = resolve_checked_in_source(w, view)
+                if resolved_count > 0:
+                    self._refresh_report(w)
+
+    def _refresh_report(self, window):
+        """Regenerate the report and revert todoUNDP.md if it's open."""
+        _, md_path = get_paths(window)
+        if not md_path:
+            return
+        generate_markdown_report(window)
+        todo_view = window.find_open_file(md_path)
+        if todo_view:
+            todo_view.run_command("revert")
             
     def on_load(self, view):
         file_path = view.file_name()
