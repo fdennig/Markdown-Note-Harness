@@ -5,6 +5,7 @@ import re
 import subprocess
 import webbrowser
 import tempfile
+from urllib.parse import quote
 
 # ---------------------------
 # Helper function to open file or URL
@@ -45,6 +46,26 @@ def open_file(path):
                 print("Failed to open file {0}. Error: {1}".format(path, e))
         else:
             print("File does not exist: {0}".format(path))
+
+# ---------------------------
+# Helpers: YAML frontmatter
+# ---------------------------
+
+def parse_frontmatter(content):
+    """Return the raw YAML frontmatter block from Markdown content, or None."""
+    m = re.match(r'^---\s*(?:yaml|yml)?\s*\n(.*?)\n---', content, re.DOTALL | re.IGNORECASE)
+    return m.group(1) if m else None
+
+def frontmatter_field(frontmatter, key):
+    """Return a scalar frontmatter value with quotes stripped, or '' if absent."""
+    if not frontmatter:
+        return ""
+    m = re.search(
+        r'^{0}\s*:\s*"?([^"\r\n]+?)"?\s*$'.format(re.escape(key)),
+        frontmatter,
+        re.MULTILINE
+    )
+    return m.group(1).strip() if m else ""
 
 # ---------------------------
 # Command 1: Open Markdown link
@@ -290,3 +311,39 @@ class ConvertToMarkdownCommand(sublime_plugin.WindowCommand):
             self.window.status_message("Converted {0} to Markdown".format(basename))
         except Exception as e:
             sublime.error_message("Error during conversion: {0}".format(str(e)))
+
+
+# ---------------------------
+# Command 4: Reply to email
+# ---------------------------
+class ReplyToEmailCommand(sublime_plugin.TextCommand):
+    """
+    Parse YAML frontmatter for from_email and subject, then open
+    a mailto: link to compose a reply.
+    """
+    def run(self, edit):
+        content = self.view.substr(sublime.Region(0, self.view.size()))
+
+        # Extract YAML frontmatter between --- delimiters
+        frontmatter = parse_frontmatter(content)
+        if frontmatter is None:
+            sublime.error_message("No YAML frontmatter found in this file.")
+            return
+
+        email = frontmatter_field(frontmatter, "from_email")
+        if not email:
+            sublime.error_message("No from_email field found in frontmatter.")
+            return
+
+        subject = frontmatter_field(frontmatter, "subject")
+
+        # Prepend Re: if not already present
+        if subject and not re.match(r'^Re:', subject, re.IGNORECASE):
+            subject = "Re: " + subject
+
+        # Build mailto URL
+        mailto = "mailto:{0}".format(quote(email, safe='@'))
+        if subject:
+            mailto += "?subject={0}".format(quote(subject, safe=''))
+
+        webbrowser.open(mailto)

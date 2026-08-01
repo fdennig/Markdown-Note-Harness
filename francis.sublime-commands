@@ -24,5 +24,9 @@
     {
       "caption": "Convert Office File to Markdown",
       "command": "convert_to_markdown"
+    },
+        {
+      "caption": "Reply to email",
+      "command": "reply_to_email"
     }
 ]
