@@ -398,7 +398,7 @@ def generate_markdown_report(window):
         log_message("No existing completed section, using default")
 
     output = []
-    output.append("# Project TODOs\n\n")
+    output.append("# Project TODOs\n")
     output.append("_Generated from todo.yml on {}_\n\n".format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M')))
 
     # --- Urgent Section (NEW) ---
@@ -435,7 +435,7 @@ def generate_markdown_report(window):
 
     # --- By File ---
     log_message("Processing by-file section")
-    output.append("## By File\n\n")
+    output.append("# By File\n")
     files_map = {}
     for t in todos:  # Include ALL todos (urgent + normal) in By File section
         filepath = t.get('filepath', 'Unknown')
@@ -452,7 +452,7 @@ def generate_markdown_report(window):
     for filepath in sorted_filepaths:
         try:
             display_name = get_display_name(filepath)
-            output.append("### {}\n".format(display_name))
+            output.append("## {}\n".format(display_name))
             for t in files_map[filepath]:
                 output.append("- [ ] {}\n".format(t.get('text', '')))
             output.append("\n")
@@ -830,7 +830,7 @@ def process_resolutions(window):
         
         # 7. APPEND TO HISTORY
         if not history_lines:
-            history_lines = ["## Completed (History)\n", "\n"]
+            history_lines = ["### Completed (History)\n", "\n"]
         
         # Find the header and ensure there's a blank line after it
         header_index = 0
