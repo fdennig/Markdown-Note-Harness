@@ -1,6 +1,10 @@
 Francis Sublime Packagge
 ========================
 
+# todo, next improvements
+ - make sure the outlook macro also sends through the email addressess of the other recipients, and implement reply-all
+     - remember to include the text
+
 # wiki_page.py
 - this file needs to supercede the file with the same name in the Markdown Editing Package
 - It does three things
