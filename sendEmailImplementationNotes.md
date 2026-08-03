@@ -1,40 +1,80 @@
-Short answer: **none at all.** Sublime's embedded Python is a stock CPython 3.8 with a trimmed stdlib, and the `sublime`/`sublime_plugin` modules are purely editor API — buffers, views, windows, settings. There's no mail, MAPI, or COM binding anywhere in it. `pywin32` isn't bundled, and installing it into Sublime's interpreter is awkward (compiled extensions plus DLL loading).
+# Why replying from Sublime has to go through Outlook
 
-But that doesn't matter much, because your plugin already demonstrates the real bridge: `ConvertToMarkdownCommand` shells out with `subprocess.Popen`. Sublime is a native Windows process, so anything you can drive from PowerShell you can drive from a Sublime command.
+Background for `outlookReplyProposal.md`, which builds on the conclusion here.
+Kept because it is the *why*: the proposal assumes all of this and does not
+re-argue it.
 
-## Why mailto can never do this
+## Sublime has no mail API, and does not need one
 
-Outlook's conversation grouping isn't derived from the subject line. It reads the `In-Reply-To` and `References` headers, plus Outlook's own MAPI properties `PR_CONVERSATION_INDEX` and `PR_CONVERSATION_TOPIC`. RFC 6068 restricts which headers a `mailto:` URL may set, and Outlook honors essentially subject/body/cc/bcc. There is no mailto formulation that threads correctly — you'd always get a new root conversation.
+The `sublime` / `sublime_plugin` modules are purely editor API — buffers, views,
+windows, settings. No mail, no MAPI, no COM. `pywin32` is not bundled, and
+installing it into Sublime's interpreter is awkward: compiled extensions plus DLL
+loading, against a host whose version you do not control. (This package runs on
+the **3.3** plugin host, not 3.8 — see CLAUDE.md.)
 
-## The approach that works
+None of that matters, because `ConvertToMarkdownCommand` already demonstrates the
+real bridge: `subprocess.Popen`. Sublime is a native Windows process, so anything
+drivable from PowerShell is drivable from a Sublime command.
 
-Don't *construct* a reply. Ask Outlook to reply to the original item — then Outlook itself writes the quoted original block (`From: / Sent: / To: / Subject:`) and sets the conversation properties correctly. That's the whole trick.
+## `mailto:` can never thread
 
-Via COM from PowerShell, which needs nothing installed:
+Outlook's conversation grouping is not derived from the subject line. It reads
+`In-Reply-To` and `References`, plus Outlook's own MAPI properties
+`PR_CONVERSATION_INDEX` and `PR_CONVERSATION_TOPIC`. RFC 6068 restricts which
+headers a `mailto:` URL may set, and Outlook honours essentially
+subject / body / cc / bcc.
+
+So there is no `mailto:` formulation that threads. It always starts a new root
+conversation. `ReplyToEmailCommand` still exists for notes that carry no Outlook
+handle, but that is what it costs.
+
+## Don't construct a reply — ask Outlook to reply
+
+The whole trick. Hand the original item back to Outlook and let it write the
+quoted `From: / Sent: / To: / Subject:` block and set the conversation properties
+itself:
 
 ```powershell
-$ol   = New-Object -ComObject Outlook.Application
-$ns   = $ol.GetNamespace("MAPI")
-$item = $ns.GetItemFromID($entryId)
-$reply = $item.Reply()        # or .ReplyAll()
-$reply.Display()              # opens the compose window; don't .Send()
+$ol    = New-Object -ComObject Outlook.Application
+$ns    = $ol.GetNamespace("MAPI")
+$item  = $ns.GetItemFromID($entryId, $storeId)
+$reply = $item.Reply()        # or .ReplyAll() / .Forward()
+$reply.Display()              # never .Send()
 ```
 
-Your command becomes: parse frontmatter → `subprocess.Popen(["powershell", "-NoProfile", "-Command", ...])` with the same `startupinfo` console-hiding trick you already use for Pandoc.
+Nothing is reconstructed from the downloaded Markdown, so the reply is
+indistinguishable from a hand-written one in every recipient's client.
 
-## What you need in the frontmatter
+This is what `outlook_bridge.ps1` does.
 
-You need a handle on the original message, so the downloader has to capture one at export time:
+## What the note has to carry
 
-- **`entry_id`** — Outlook's `EntryID`. Direct lookup via `GetItemFromID`, fastest. Downside: it changes if the item moves between folders or stores, so archived mail can break.
-- **`message_id`** — the RFC 5322 `Message-ID` header. Stable forever. Look it up with a DASL restriction on `urn:schemas:mailheader:message-id`, or `AdvancedSearch`. Slower but survives archiving.
+A handle on the original message, captured at export time by the macro:
 
-Storing both and preferring `entry_id` with a `message_id` fallback is the robust combination. Falling back to a subject+sender+received-time search when neither is present works but is genuinely brittle — same-subject threads collide.
+- **`entry_id`** — Outlook's `EntryID`. `GetItemFromID`, O(1). Re-keyed when the
+  item moves between stores, so archived mail stops resolving.
+- **`store_id`** — required alongside it. The one-argument `GetItemFromID` searches
+  only the default store, so archives and shared mailboxes resolve to nothing
+  without it.
+- **`message_id`** — the RFC 5322 header. Stable forever, found by a store search,
+  seconds rather than microseconds. The fallback for after an archive.
+- **`conversation_id`** — never a lookup key on its own; it disambiguates
+  candidates a search already returned.
 
-## Two caveats that decide whether any of this is viable
+The macro writes all four. The plugin currently uses the first two.
 
-**"New Outlook" has no COM interface.** The classic Win32 desktop client exposes the Outlook Object Model; the rewritten client (and Outlook on the web) does not. If you're on new Outlook, the equivalent is Microsoft Graph — `POST /me/messages/{id}/createReply`, which returns a properly threaded draft. That's a genuinely bigger lift: app registration, OAuth device-code flow, token caching. Worth confirming which client you're on before investing in the COM path.
+## Two caveats that decided the approach
 
-**The Outlook security model** can prompt on programmatic access to address data. Using `.Display()` rather than `.Send()` keeps you out of the worst of it, and on a domain-joined machine with current AV registered in Security Center the guard is usually suppressed entirely.
+**New Outlook has no COM interface.** The classic Win32 client exposes the Outlook
+Object Model; the rewritten client and Outlook on the web do not. This turned out
+to be an advantage rather than a risk: because only classic registers the
+`Outlook.Application` ProgID, `New-Object -ComObject Outlook.Application` attaches
+to classic or launches it, and which client is *default* never has to be detected.
+On a machine with only new Outlook, the equivalent would be Microsoft Graph
+(`POST /me/messages/{id}/createReply`) — app registration, OAuth device-code flow,
+token caching. A much bigger lift.
 
-One nice side effect of the COM route: since Outlook generates the quoted body, you don't need to reconstruct anything from your downloaded Markdown — the reply looks exactly like a hand-written one to every recipient's client.
+**Outlook's object-model guard** can prompt on programmatic access to address data.
+Using `.Display()` rather than `.Send()`, and never touching `.Recipients` on a
+resolved item, stays clear of it. No prompt has been seen in testing on this
+profile.
