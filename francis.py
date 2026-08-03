@@ -129,6 +129,32 @@ def outlook_refs(frontmatter):
                 refs[m.group(1)] = value
     return refs
 
+def outlook_lookup(view):
+    """Everything the bridge needs to find a view's message, or None.
+
+    None means the buffer has no parseable frontmatter at all; a dict with
+    neither 'entry_id' nor 'subject' means there is frontmatter but nothing to
+    look the message up by. Both are refusals, and the caller distinguishes them
+    only to word the error.
+
+    Factored out so OutlookMailActionCommand.is_enabled and .run apply the same
+    two tests -- if they drifted, F12 would light up on notes that then fail.
+    Reads only the frontmatter window, not the whole buffer: is_enabled runs on
+    every F12 press and on every palette open.
+    """
+    head = view.substr(sublime.Region(0, min(view.size(), FRONTMATTER_READ_CHARS)))
+    frontmatter = parse_frontmatter(head)
+    if frontmatter is None:
+        return None
+    refs = outlook_refs(frontmatter)
+    return {
+        "entry_id": refs.get("entry_id", ""),
+        "store_id": refs.get("store_id", ""),
+        "subject": frontmatter_field(frontmatter, "subject"),
+        "from_email": frontmatter_field(frontmatter, "from_email"),
+        "date": frontmatter_field(frontmatter, "date"),
+    }
+
 # ---------------------------
 # Helpers: the Outlook bridge
 # ---------------------------
@@ -1044,20 +1070,33 @@ class OutlookMailActionCommand(sublime_plugin.TextCommand):
     'resolve' touches nothing and is the safe probe: it exercises the whole path
     and composes no window. Its full response goes to the console.
     """
+    def is_enabled(self, action="open"):
+        # Takes the same args as run: Sublime passes a command's args to
+        # is_enabled too, and a TypeError raised here is swallowed.
+        #
+        # This is what keeps the F12 binding honest. That binding subtracts
+        # every competing link scope, but it still covers the body of every
+        # markdown file, because no scope distinguishes an email note from any
+        # other one. Without this guard every F12 in todoUNDP.md or a plain note
+        # would spawn PowerShell for a certain failure. Greying the palette
+        # entries out is the smaller half of it.
+        lookup = outlook_lookup(self.view)
+        return bool(lookup and (lookup["entry_id"] or lookup["subject"]))
+
     def run(self, edit, action="open"):
         if action not in BRIDGE_ACTIONS:
             sublime.error_message("Unknown Outlook action: {0}".format(action))
             return
 
-        content = self.view.substr(sublime.Region(0, self.view.size()))
-        frontmatter = parse_frontmatter(content)
-        if frontmatter is None:
+        # is_enabled has already ruled both of these out for the keybinding and
+        # the palette; they remain because run is still reachable from the API
+        # and the console.
+        lookup = outlook_lookup(self.view)
+        if lookup is None:
             sublime.error_message("No YAML frontmatter found in this file.")
             return
 
-        refs = outlook_refs(frontmatter)
-        subject = frontmatter_field(frontmatter, "subject")
-        if not refs.get("entry_id") and not subject:
+        if not lookup["entry_id"] and not lookup["subject"]:
             sublime.error_message(
                 "This note carries neither an Outlook entry_id nor a subject, "
                 "so there is nothing to look the message up by.\n\n"
@@ -1070,13 +1109,14 @@ class OutlookMailActionCommand(sublime_plugin.TextCommand):
         run_bridge(
             {
                 "action": action,
-                "entry_id": refs.get("entry_id", ""),
-                "store_id": refs.get("store_id", ""),
-                # Only read when there is no entry_id, but always sent: which
-                # path the bridge takes is its decision, not ours.
-                "subject": subject,
-                "from_email": frontmatter_field(frontmatter, "from_email"),
-                "date": frontmatter_field(frontmatter, "date"),
+                "entry_id": lookup["entry_id"],
+                "store_id": lookup["store_id"],
+                # subject/from_email/date are only read when there is no
+                # entry_id, but always sent: which path the bridge takes is its
+                # decision, not ours.
+                "subject": lookup["subject"],
+                "from_email": lookup["from_email"],
+                "date": lookup["date"],
             },
             lambda result, error: self.on_done(action, result, error)
         )

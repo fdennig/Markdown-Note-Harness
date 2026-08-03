@@ -3,6 +3,39 @@
         "keys": ["super+alt+z"],
         "command": "sublime_merge_open_repo"
     },
+    { // Open the original message in Outlook -- caret in the body of a note,
+      // i.e. NOT on a link of any kind.
+      //
+      // The subtraction is load-bearing, not tidiness. F12 in markdown is
+      // shared with MarkdownEditing, which binds it three times in
+      // Default (Windows).sublime-keymap: mde_reference_jump on
+      // meta.link.reference (:1312), mde_magic_footnotes on
+      // meta.link.reference.footnote (:1323) and mde_open_page -- the wiki
+      // link jump -- on meta.link.reference.wiki.description.markdown (:1529).
+      // Sublime runs the LAST matching binding across the merged keymap, and
+      // package order is ASCII, so 'MarkdownEditing' (M) loads before
+      // 'francis_sublime_package' (f) and this package always wins. Ordering
+      // within this file therefore cannot hand those scopes back: a bare
+      // text.html.markdown here silently eats all three. Only the selector can.
+      //
+      // '- (meta.link | markup.underline.link)' is MarkdownEditing's own idiom
+      // for "markdown, but not in a link" (see its :1543). It covers the wiki,
+      // reference and footnote scopes above and the inline-link binding below;
+      // entity.name.attachment.yaml is added because the frontmatter is
+      // embedded rather than a separate buffer, so the markdown base scope is
+      // live on attachment values too and they are not under meta.link.
+      //
+      // With every competing scope subtracted, the two bindings below no longer
+      // depend on sitting after this one.
+      //
+      // Non-email notes are ruled out by OutlookMailActionCommand.is_enabled,
+      // not by the selector -- no scope tells an email note from any other.
+        "keys": ["f12"], "command": "outlook_mail_action",
+        "args": { "action": "open" }, "context":
+        [
+            { "key": "selector", "operator": "equal", "operand": "text.html.markdown - (meta.link | markup.underline.link | entity.name.attachment.yaml)", "match_all": true }
+        ]
+    },
     { // Open markdown link
         "keys": ["f12"], "command": "open_linked_file", "context":
         [

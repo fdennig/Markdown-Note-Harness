@@ -35,9 +35,11 @@ All are in the command palette; the ones with a keybinding say so.
   `/priority` or `/personal`, with `/subject` and `/sender` swapping which field
   the search matches. Highlighting a row previews it with the frontmatter folded.
 - *Email: Open all to-reply* — opens every to-reply note in tabs.
-- *Email: Open original in Outlook*, and the reply / reply-all / forward variants —
-  acts on the live Outlook item the note was exported from, so a reply lands in the
-  original thread. Outlook writes the quoted block and the threading headers itself.
+- *Email: Open original in Outlook* — `F12` with the caret in the body of a note,
+  anywhere that isn't a link — and the reply / reply-all / forward variants. Acts
+  on the live Outlook item the
+  note was exported from, so a reply lands in the original thread. Outlook writes
+  the quoted block and the threading headers itself.
 - *Email: Resolve in Outlook (diagnostic)* — runs the whole lookup and touches
   nothing. The safe probe when a note won't open.
 - *Reply to email* — the `mailto:` fallback. Needs nothing from Outlook, but starts
@@ -52,7 +54,9 @@ All are in the command palette; the ones with a keybinding say so.
 
 - *Convert Office File to Markdown* — .docx / .pptx via Pandoc, .pdf via marker-pdf.
 - *Open Markdown Link* — `F12` on a Markdown link, or on an attachment name in
-  frontmatter.
+  frontmatter. `F12` on a `[[wiki link]]`, a reference link or a footnote stays
+  MarkdownEditing's. *Open original in Outlook* is on the same key but subtracts
+  every one of those scopes, so each still gets its own F12.
 - *Select wiki reference* — `Tab` inside `[brackets]` in a Markdown file.
 
 `super+alt+z` opens the current repo in Sublime Merge.
@@ -118,4 +122,5 @@ understood.)
 - Backfill: the subject search already knows the ids it found, so writing them into
   the note would make the next open an O(1) lookup. Not built — it edits your notes.
 - A `message_id` fallback, for archived mail whose `entry_id` Outlook has re-keyed.
-- Keybindings for the Outlook actions. `F12` is spoken for by scope-based dispatch.
+- Keybindings for the reply / reply-all / forward variants. *Open* has `F12`; the
+  other three would need a key each, since scope cannot tell them apart.
