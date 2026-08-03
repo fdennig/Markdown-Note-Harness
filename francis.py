@@ -63,7 +63,10 @@ FRONTMATTER_BEGIN_SELECTOR = "punctuation.section.frontmatter.begin.markdown"
 FRONTMATTER_END_SELECTOR = "punctuation.section.frontmatter.end.markdown"
 
 # Frontmatter lives at the top of the file; no need to read the whole email.
-FRONTMATTER_READ_CHARS = 8192
+# Generous because parse_frontmatter needs the CLOSING '---' inside the window
+# or it matches nothing, and a note carrying an Outlook store_id (several
+# hundred hex characters) plus a long attachment list eats into the margin.
+FRONTMATTER_READ_CHARS = 16384
 
 def parse_frontmatter(content):
     """Return the raw YAML frontmatter block from Markdown content, or None."""
@@ -91,6 +94,38 @@ def read_frontmatter(path):
     except Exception as e:
         print("Could not read frontmatter from {0}: {1}".format(path, e))
         return None
+
+# The Outlook back-references, in the order the macro writes them.
+OUTLOOK_REF_KEYS = ("entry_id", "store_id", "message_id", "conversation_id")
+
+def outlook_refs(frontmatter):
+    """Read the foldable 'outlook:' sequence into a dict.
+
+    The macro writes the back-references as a YAML sequence rather than as
+    top-level keys, so the whole block folds to one line like 'attachments:'
+    does. That also puts them out of frontmatter_field's reach: it anchors keys
+    at column 0, and these sit indented under a '- '.
+
+    Empty values are dropped so a caller can just test for the key -- the macro
+    writes 'entry_id: ' empty rather than omitting the line when the lookup
+    failed on its side.
+    """
+    refs = {}
+    if not frontmatter:
+        return refs
+    in_block = False
+    for line in frontmatter.splitlines():
+        if re.match(r'^outlook\s*:\s*$', line):
+            in_block = True
+            continue
+        if in_block:
+            m = re.match(r'^\s+-\s*(\w+)\s*:\s*"?([^"\r\n]*?)"?\s*$', line)
+            if not m:
+                break              # first non-item line ends the sequence
+            value = m.group(2).strip()
+            if value:
+                refs[m.group(1)] = value
+    return refs
 
 def clean_name(value):
     """Unwrap a '[[@Person Name]]' wiki link written by the Outlook macro."""
