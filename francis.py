@@ -163,8 +163,8 @@ BRIDGE_REASONS = {
     "not_found": "Outlook has no item with that entry_id.\n\n"
                  "An EntryID is a lease, not an address: Outlook re-keys it "
                  "when the item moves between stores, so an archived or "
-                 "deleted message no longer resolves. The message_id and "
-                 "time-window fallbacks that would find it are not built yet.",
+                 "deleted message no longer resolves. The note carries a "
+                 "store_id too, so this means the message really has moved.",
     "unsupported_item": "That action does not apply to this kind of item.",
     "com_error": "Outlook refused the call.",
 }
@@ -1028,17 +1028,18 @@ class OutlookMailActionCommand(sublime_plugin.TextCommand):
     Parameterised by args rather than split into five near-identical classes,
     the same shape as open_frontmatter_symbol.
 
-    Resolution is entry_id + store_id and nothing else -- one O(1)
-    GetItemFromID. store_id is not decoration: without it Outlook searches only
-    the default store, so anything in an archive or a shared mailbox resolves to
-    nothing. The macro writes both.
+    A note carrying the macro's 'outlook:' block resolves by entry_id +
+    store_id, one O(1) GetItemFromID. store_id is not decoration: without it
+    Outlook searches only the default store, so anything in an archive or a
+    shared mailbox resolves to nothing. The macro writes both.
 
-    A note with no entry_id is not an error in the code -- notes exported before
-    the macro started writing the 'outlook:' block have none, and sent notes
-    never get one, because .Send re-keys the item. Nor is a note whose message
-    has since been archived: Outlook re-keys the EntryID on a move between
-    stores. Both report and stop; the message_id and time-window search tiers
-    that would cover them are deliberately not built yet.
+    A note without that block -- everything exported before the macro grew one --
+    is found by its subject instead, narrowed by from_email and date. The whole
+    chain runs inside a single bridge invocation, so nothing is orchestrated
+    here: the bridge either acts on a unique match or puts the subject into
+    Outlook's own search box and raises the window, which is a better answer
+    than a wrong guess. Either way the response says which happened, via
+    matched_by.
 
     'resolve' touches nothing and is the safe probe: it exercises the whole path
     and composes no window. Its full response goes to the console.
@@ -1055,13 +1056,13 @@ class OutlookMailActionCommand(sublime_plugin.TextCommand):
             return
 
         refs = outlook_refs(frontmatter)
-        if not refs.get("entry_id"):
+        subject = frontmatter_field(frontmatter, "subject")
+        if not refs.get("entry_id") and not subject:
             sublime.error_message(
-                "This note carries no Outlook entry_id.\n\n"
-                "Notes exported before the macro started writing the 'outlook:' "
-                "block have none, and sent notes never get one. Use "
-                "'Reply to email' for those -- it composes via mailto, which "
-                "does not thread but needs nothing from Outlook."
+                "This note carries neither an Outlook entry_id nor a subject, "
+                "so there is nothing to look the message up by.\n\n"
+                "Use 'Reply to email' -- it composes via mailto, which does not "
+                "thread but needs nothing from Outlook."
             )
             return
 
@@ -1069,8 +1070,13 @@ class OutlookMailActionCommand(sublime_plugin.TextCommand):
         run_bridge(
             {
                 "action": action,
-                "entry_id": refs["entry_id"],
+                "entry_id": refs.get("entry_id", ""),
                 "store_id": refs.get("store_id", ""),
+                # Only read when there is no entry_id, but always sent: which
+                # path the bridge takes is its decision, not ours.
+                "subject": subject,
+                "from_email": frontmatter_field(frontmatter, "from_email"),
+                "date": frontmatter_field(frontmatter, "date"),
             },
             lambda result, error: self.on_done(action, result, error)
         )
@@ -1090,9 +1096,20 @@ class OutlookMailActionCommand(sublime_plugin.TextCommand):
             ).strip())
             return
 
-        sublime.status_message("Outlook: {0} {1}".format(
+        if result.get("matched_by") == "search_ui":
+            # Nothing was opened: Outlook is showing search results and the
+            # window has been raised, so say so rather than implying a hit.
+            sublime.status_message(
+                "Outlook: could not pin this down ({0} match(es)) -- searching {1}".format(
+                    result.get("hits", 0), result.get("query", "")
+                )
+            )
+            return
+
+        sublime.status_message("Outlook: {0} {1}{2}".format(
             ACTION_DONE.get(action, action),
-            collapse_whitespace(result.get("subject") or "(no subject)")
+            collapse_whitespace(result.get("subject") or "(no subject)"),
+            "" if result.get("matched_by") == "entry_id" else "  (found by subject)"
         ))
 
 
