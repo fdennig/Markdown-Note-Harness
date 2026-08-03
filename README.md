@@ -72,18 +72,33 @@ The macros in `outlook_macros/` write each note's frontmatter with a foldable
 on the real item — the only way to reply *inside* a thread, since `mailto:` cannot
 set `In-Reply-To` or Outlook's conversation properties.
 
-Resolution currently uses `entry_id` + `store_id` only: one `GetItemFromID`, and
-that is it. Two kinds of note therefore can't be acted on, and say so rather than
-guessing:
+A note carrying that block resolves in one `GetItemFromID` — `store_id` included,
+without which Outlook only searches the default store and archives resolve to
+nothing.
 
-- notes exported before the macro started writing the `outlook:` block, and `sent:`
-  notes, which never get an `entry_id` — `.Send` re-keys the item;
-- notes whose message has since been archived or moved between stores, because
-  Outlook re-keys the `EntryID` on the move.
+**Legacy notes** — everything exported before the macro grew the `outlook:` block
+— are found by their `subject` instead, narrowed by `from_email` and then `date`.
+Outlook's Inbox, Sent Items and Deleted Items are searched; a unique survivor is
+opened, and anything else — no match or several — hands the subject to Outlook's
+own search box and raises the window, which is a better answer than a wrong guess.
 
-The `message_id` and time-window search tiers that would cover both are designed
-but unbuilt. `outlookReplyProposal.md` has the design, and more usefully the list
-of things that testing against a real Exchange profile disproved.
+Measured over a random sample of 40 legacy notes: **39 open directly, 1 lands in
+the search box.** Typically 1–4s; the worst realistic case — a subject shared by 29
+messages in one thread, resolved by sender and date — took 10s.
+
+Two details worth knowing, because both look like bugs otherwise:
+
+- The subject is matched as a `LIKE` on its longest word and then compared exactly
+  *after sanitising*, never as an equality filter. Frontmatter subjects written
+  before 2026-08 had `: ? / \ " < > | [ ]` stripped by the filename sanitiser, so
+  `Re: Draft PS Invitation` is stored as `Re Draft PS Invitation`.
+- Note dates are occasionally an hour out from Outlook's received time. No filter
+  is ever allowed to empty the candidate set, so a drifted date costs you the
+  search box rather than a wrong message.
+
+`sent:` notes reach neither path: `.Send` re-keys the item, so they have no
+`entry_id`, and their date is a send time the stored copy does not share. A note
+whose message has genuinely been archived or deleted reports and stops.
 
 ## `wiki_page_FOR_MARKDOWN_EDITING.txt`
 
@@ -100,6 +115,7 @@ understood.)
 - Capture the other recipients in the macro, so reply-all has real addresses to
   work from and the note records who was on the thread. Remember to include the
   body text.
-- Build the `message_id` fallback so archived mail still resolves, and backfill the
-  refreshed ids into the note.
+- Backfill: the subject search already knows the ids it found, so writing them into
+  the note would make the next open an O(1) lookup. Not built — it edits your notes.
+- A `message_id` fallback, for archived mail whose `entry_id` Outlook has re-keyed.
 - Keybindings for the Outlook actions. `F12` is spoken for by scope-based dispatch.

@@ -1,18 +1,45 @@
 # Proposal: thread-aware Reply / Reply-All / Forward via Outlook Classic
 
-> ## Status: tier 1 rebuilt and working; tiers 2–4 still a design
+> ## Status: tiers 1, 3 and 4 built; tier 2 and backfill still a design
 >
-> **Rebuilt and verified against the real profile (2026-08-02):**
-> `outlook_bridge.ps1` and `OutlookMailActionCommand`, doing **`entry_id` +
-> `store_id` only** — one `GetItemFromID`, then `Display` / `Reply` /
-> `ReplyAll` / `Forward`. Five palette entries, no keybinding. Confirmed live:
-> resolve, reply, `not_found` on a re-keyed EntryID, `bad_request` on a missing
-> id or a missing request file, and `unsupported_item` on an `IPM.Appointment`.
-> An appointment falls back from `ReceivedTime` to `Start` correctly.
+> **Built and verified against the real profile (2026-08-02/03):**
+> `outlook_bridge.ps1` and `OutlookMailActionCommand`. Palette only, no
+> keybinding.
 >
-> **Everything below about tiers 2–4** — `message_id`, the ±2 minute window,
-> `ui_search` — plus **backfill (§3c)** and the **`mailto` floor (§3d)** remains
-> unbuilt design. §1d is done (the macro now writes the raw subject).
+> - **Tier 1** — `entry_id` + `store_id` → `GetItemFromID`, then `Display` /
+>   `Reply` / `ReplyAll` / `Forward`. Confirmed live: resolve, reply,
+>   `not_found` on a re-keyed EntryID, `bad_request` on a missing id or a
+>   missing request file, `unsupported_item` on an `IPM.Appointment` (which
+>   falls back from `ReceivedTime` to `Start` correctly). A stale EntryID
+>   deliberately does **not** fall through to tier 3: the block carries
+>   `store_id`, so a failure means the message really moved.
+> - **Tier 3** — subject, narrowed by sender then received time, over Inbox /
+>   Sent Items / Deleted Items. Built much smaller than designed below: no
+>   `message_id`, no folder walk, no candidate quick panel. **39 of a random 40
+>   legacy notes opened directly; 1 went to the search box; none failed.**
+>   Typically 1–4s, worst realistic case 10s.
+> - **Tier 4** — the search-box handoff, reached automatically whenever tier 3
+>   does not land on exactly one message, whether that is none or several.
+>   `Explorer.Search` works; scope **2** (`olSearchScopeAllFolders`) is the one
+>   that lands on "All Outlook Items", and the `3` written below is wrong —
+>   measured as a no-op.
+>
+> **Departures from the design below, all forced by measurement:** the subject is
+> matched as a `LIKE` on its longest word and compared exactly only *after*
+> re-applying the filename sanitiser (§1d fixed that going forward, but the
+> existing notes are still stripped); the sender tiebreaker needs
+> `PR_SENDER_SMTP_ADDRESS`, not the two properties §2 reaches for; and sender is
+> applied *before* time, not after.
+>
+> **A whole-hour-offset tolerance for the date comparison was built and then
+> removed.** One note dated `19:20` matches a message received at `18:20`, so it
+> looked necessary — but across 41 notes it decided zero cases, because sender
+> settles those first. What actually makes the drift harmless is that no
+> tiebreaker is ever allowed to empty the candidate set.
+>
+> **Still unbuilt:** **tier 2** (`message_id`), **backfill (§3c)**, and the
+> **`mailto` floor (§3d)**, which remains a separate command rather than an
+> automatic fallback.
 >
 > **One correction to the closing paragraph:** Outlook *is* reachable from the
 > Linux side of this box. `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe`
