@@ -9,7 +9,8 @@ in your vault.
 
 When run from an open compose window, the macro:
 
-1. Reads the draft (subject, body, recipients, attachments) and resolves recipient names.
+1. Reads the draft (subject, body, recipients, attachments), resolves recipient names, and
+   saves the draft — which is what assigns it a `ConversationID`.
 2. Builds a Markdown note with YAML frontmatter:
    - `toreply: `
    - `personal: `
@@ -17,6 +18,10 @@ When run from an open compose window, the macro:
    - `class: email`
    - `sent: true` — lets you filter outgoing notes in Obsidian
    - `subject`, `date` (send time), `from` / `from_email` (you), `to:` list, `tags:`, `attachments`
+   - `outlook:` — the foldable back-reference list, holding only `conversation_id` here. It
+     is the sole Outlook handle an outgoing note can carry: `.Send` re-keys the item's
+     `EntryID` as it moves to Sent Items, and the `Message-ID` is stamped by the transport,
+     so neither exists at the moment the note is written.
 3. Saves the note as UTF-8, named:
    `Sent_<yyyy-MM-dd>_<HHNN> @<first recipient> - <subject>.md`
    (outgoing mail is keyed on the recipient, since the sender is always you).

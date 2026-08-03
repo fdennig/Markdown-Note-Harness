@@ -86,8 +86,14 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
           GoTo EndClean: ' you broke it
         End If
 
-        ' Yank the mail items subject line to `temporarySubjectLineString`
-        temporarySubjectLineString = oMail.Subject
+        ' Keep the subject twice over: the raw one goes into the note, the
+        ' cleaned one into the filename. These used to be a single string, so
+        ' filename sanitising silently stripped ':' '?' '/' and friends out of
+        ' the frontmatter as well, leaving a subject that could never be
+        ' matched back against Outlook's own.
+        Dim rawSubject As String
+        rawSubject = oMail.Subject
+        temporarySubjectLineString = rawSubject
         ' function call the name cleaner to remove any
         '    illegal characters from the subject line
         ReplaceCharsForFileName temporarySubjectLineString, ""
@@ -125,7 +131,7 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
         resultString = resultString & "personal: " & IIf(isPersonal, "true", "") & vbCrLf
         resultString = resultString & "priority: " & priority & vbCrLf
         resultString = resultString & "class: email" & vbCrLf
-    resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf
+        resultString = resultString & "subject: " & YamlQuoted(rawSubject) & vbCrLf
         resultString = resultString & "date: " & Format(oMail.ReceivedTime, "yyyy-MM-dd HH:mm") & vbCrLf
         resultString = resultString & "from: """ & sender & """" & vbCrLf
         ' Add sender email address if available (placed once here)
@@ -154,6 +160,32 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
         Else
             resultString = resultString & "attachments: []" & vbCrLf
         End If
+
+        ' --- Outlook back-references ----------------------------------------
+        ' Handles on the live Outlook item, so the Sublime plugin can reply,
+        ' reply-all or forward inside the original thread rather than build a
+        ' mailto: that starts a new one.
+        '
+        ' These values are long and opaque and nobody reads them, so they go
+        ' last and go in a sequence -- the same shape as 'attachments:', which
+        ' folds to a single line and stays folded while the rest of the
+        ' frontmatter is being read.
+        '   entry_id + store_id  O(1) GetItemFromID. Both are needed: the
+        '                        one-argument form searches only the default
+        '                        store, so archives and shared mailboxes miss.
+        '   message_id           stable forever, so it still resolves after the
+        '                        item moves and its EntryID is re-keyed.
+        '   conversation_id      not a lookup key on its own; it picks the right
+        '                        thread out of several same-subject candidates.
+        resultString = resultString & "outlook:" & vbCrLf
+        resultString = resultString & "  - entry_id: " & GetEntryID(oMail) & vbCrLf
+        resultString = resultString & "  - store_id: " & GetStoreID(oMail) & vbCrLf
+        Dim internetMsgId As String
+        internetMsgId = GetInternetMessageId(oMail)
+        If Len(internetMsgId) > 0 Then
+            resultString = resultString & "  - message_id: " & YamlQuoted(internetMsgId) & vbCrLf
+        End If
+        resultString = resultString & "  - conversation_id: " & GetConversationID(oMail) & vbCrLf
 
     ' End YAML block then blank line
     resultString = resultString & "---" & vbCrLf & vbCrLf
@@ -243,9 +275,12 @@ Private Sub ExtractMeetingCore()
             GoTo EndCleanMeeting:
         End If
 
-        ' Clean subject for filename
+        ' Raw subject for the note, cleaned subject for the filename -- the
+        ' same split as ExtractEmailCore
+        Dim rawSubject As String
         Dim temporarySubjectLineString As String
-        temporarySubjectLineString = oAppt.Subject
+        rawSubject = oAppt.Subject
+        temporarySubjectLineString = rawSubject
         ReplaceCharsForFileName temporarySubjectLineString, ""
 
         ' Build required attendees list
@@ -267,7 +302,7 @@ Private Sub ExtractMeetingCore()
         Dim resultString As String
         resultString = "---" & vbCrLf
         resultString = resultString & "class: meeting" & vbCrLf
-        resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf
+        resultString = resultString & "subject: " & YamlQuoted(rawSubject) & vbCrLf
         resultString = resultString & "date: " & Format(oAppt.Start, "yyyy-MM-dd HH:mm") & vbCrLf
         resultString = resultString & "end: " & Format(oAppt.End, "yyyy-MM-dd HH:mm") & vbCrLf
         resultString = resultString & "duration: " & oAppt.Duration & vbCrLf
@@ -310,6 +345,13 @@ Private Sub ExtractMeetingCore()
         Else
             resultString = resultString & "attachments: []" & vbCrLf
         End If
+
+        ' Outlook back-reference; same foldable sequence as ExtractEmailCore.
+        ' A meeting cannot be replied to, but this is what lets the plugin open
+        ' the original appointment in Outlook.
+        resultString = resultString & "outlook:" & vbCrLf
+        resultString = resultString & "  - entry_id: " & GetEntryID(oAppt) & vbCrLf
+        resultString = resultString & "  - store_id: " & GetStoreID(oAppt) & vbCrLf
 
         resultString = resultString & "---" & vbCrLf & vbCrLf
 
@@ -380,6 +422,48 @@ Fail:
     GetSenderSmtp = ""
 End Function
 
+'---------------------------------------------------------------------------'
+' Outlook back-references for the Sublime plugin.
+' Each one is defensive on purpose: a missing back-reference costs the plugin
+' one search, whereas an unhandled error here would cost the whole note.
+'---------------------------------------------------------------------------'
+Private Function GetEntryID(oItem As Object) As String
+    On Error GoTo Fail
+    GetEntryID = oItem.EntryID
+    Exit Function
+Fail:
+    GetEntryID = ""
+End Function
+
+Private Function GetStoreID(oItem As Object) As String
+    On Error GoTo Fail
+    ' oItem.Parent is the containing folder, and its StoreID is the second
+    ' argument GetItemFromID needs to reach outside the default store.
+    GetStoreID = oItem.Parent.StoreID
+    Exit Function
+Fail:
+    GetStoreID = ""
+End Function
+
+Private Function GetConversationID(oItem As Object) As String
+    On Error GoTo Fail
+    GetConversationID = oItem.ConversationID
+    Exit Function
+Fail:
+    GetConversationID = ""
+End Function
+
+Private Function GetInternetMessageId(oMail As Outlook.MailItem) As String
+    On Error GoTo Fail
+    ' PR_INTERNET_MESSAGE_ID -- the RFC 5322 Message-ID header. Absent on
+    ' drafts and on some internal-only items, hence the caller's Len() check.
+    GetInternetMessageId = oMail.PropertyAccessor.GetProperty( _
+        "http://schemas.microsoft.com/mapi/proptag/0x1035001E")
+    Exit Function
+Fail:
+    GetInternetMessageId = ""
+End Function
+
 Private Function ConvertLinksToMarkdown(bodyText As String) As String
     Dim result As String
     result = bodyText
@@ -426,9 +510,22 @@ Sub SendAndSaveEmail()
     ' Resolve names/addresses before we read them
     oMail.Recipients.ResolveAll
 
+    ' Saving assigns a ConversationID to a fresh draft, and that is the only
+    ' back-reference an outgoing note can carry: .Send invalidates this item's
+    ' EntryID (the message moves to Sent Items and is re-keyed there) and the
+    ' Message-ID is stamped by the transport, so neither exists yet. Sent notes
+    ' therefore resolve through the plugin's search fallback, not GetItemFromID.
+    On Error Resume Next
+    oMail.Save
+    On Error GoTo EndCleanSend
+    Dim conversationId As String
+    conversationId = GetConversationID(oMail)
+
     ' --- capture every field BEFORE sending (the object is invalid after .Send) ---
+    Dim rawSubject As String
     Dim temporarySubjectLineString As String
-    temporarySubjectLineString = oMail.Subject
+    rawSubject = oMail.Subject
+    temporarySubjectLineString = rawSubject
     ReplaceCharsForFileName temporarySubjectLineString, ""
 
     ' A draft has no SentOn yet, so stamp the moment we send
@@ -450,7 +547,7 @@ Sub SendAndSaveEmail()
     resultString = resultString & "priority: " & vbCrLf
     resultString = resultString & "class: email" & vbCrLf
     resultString = resultString & "sent: true" & vbCrLf
-    resultString = resultString & "subject: """ & temporarySubjectLineString & """" & vbCrLf
+    resultString = resultString & "subject: " & YamlQuoted(rawSubject) & vbCrLf
     resultString = resultString & "date: " & Format(dtDate, "yyyy-MM-dd HH:mm") & vbCrLf
     resultString = resultString & "from: """ & sender & """" & vbCrLf
 
@@ -479,6 +576,12 @@ Sub SendAndSaveEmail()
     Else
         resultString = resultString & "attachments: []" & vbCrLf
     End If
+
+    ' Outlook back-reference; see the block in ExtractEmailCore. A sent note
+    ' can only ever carry this one, but it keeps the same sequence shape so
+    ' there is a single thing to fold and a single thing to read.
+    resultString = resultString & "outlook:" & vbCrLf
+    resultString = resultString & "  - conversation_id: " & conversationId & vbCrLf
 
     resultString = resultString & "---" & vbCrLf & vbCrLf
     resultString = resultString & ConvertLinksToMarkdown(oMail.Body)

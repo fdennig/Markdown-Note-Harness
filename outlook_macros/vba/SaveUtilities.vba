@@ -99,6 +99,26 @@ Public Sub ReplaceCharsForFileName(temporarySubjectLineString As String, sChr As
     temporarySubjectLineString = Replace(temporarySubjectLineString, "]", sChr)
 End Sub
 '======================================================================================='
+Public Function YamlQuoted(ByVal s As String) As String
+    ' Wrap an arbitrary string as a YAML double-quoted scalar.
+    ' Needed since the note's subject stopped going through
+    ' ReplaceCharsForFileName, which used to remove the awkward characters as a
+    ' side effect of making the string safe for a filename.
+    '
+    ' Backslash is an escape character inside double quotes, so a raw subject
+    ' like "Q1\Q2 forecast" would otherwise emit invalid YAML.
+    s = Replace(s, "\", "\\")
+    ' Quotes become two apostrophes rather than \" -- the convention already
+    ' used for attachment names and meeting locations, and the one the plugin's
+    ' frontmatter regex can read (it stops dead at an embedded double quote).
+    s = Replace(s, Chr(34), "''")
+    ' A subject can carry a line break; unescaped it would end the scalar and
+    ' corrupt the rest of the frontmatter.
+    s = Replace(s, vbCr, " ")
+    s = Replace(s, vbLf, " ")
+    YamlQuoted = Chr(34) & s & Chr(34)
+End Function
+'======================================================================================='
 Public Function formatName(str As String, personNameStartChar As String) As String
     ' Meeting attendee names are formatted strangely
     ' This function parses the attendees and formats them to:

@@ -4,6 +4,7 @@ This project automates saving Outlook emails as **Markdown notes** in an **Obsid
 
 ## 🚀 Features
 ✅ Extracts emails as **Markdown** with structured **YAML frontmatter** (`toreply`, `personal`, `priority`, `class`, `subject`, `date`, `from`, `to`, `attachments`)  
+✅ Carries **Outlook back-references** in a foldable `outlook:` list (`entry_id`, `store_id`, `message_id`, `conversation_id`) so an editor can reply, reply-all or forward inside the original thread  
 ✅ Saves emails **directly to your Obsidian vault**  
 ✅ Task integration: Adds `- [ ] email title` at the top of the note  
 ✅ **Macro Variants**:
