@@ -1,9 +1,11 @@
 import sublime
 import sublime_plugin
 import html
+import json
 import os
 import re
 import subprocess
+import threading
 import webbrowser
 import tempfile
 from urllib.parse import quote
@@ -126,6 +128,124 @@ def outlook_refs(frontmatter):
             if value:
                 refs[m.group(1)] = value
     return refs
+
+# ---------------------------
+# Helpers: the Outlook bridge
+# ---------------------------
+
+# outlook_bridge.ps1 sits at the package root but is inert to Sublime -- a .ps1
+# is loaded by nothing -- and is reached only through subprocess. The package is
+# a loose directory, so the script is on disk and directly executable; were it
+# ever zipped into a .sublime-package this would have to become
+# sublime.load_resource() plus a write to temp.
+BRIDGE_SCRIPT = "outlook_bridge.ps1"
+PACKAGE_NAME = "francis_sublime_package"
+
+# powershell.exe, not pwsh: PowerShell 7's COM interop with Outlook is
+# unreliable, and 5.1 ships with Windows.
+POWERSHELL = "powershell.exe"
+
+CREATE_NO_WINDOW = 0x08000000
+
+# Attaching to a cold Outlook takes seconds, and the first COM call after a
+# resume can take considerably longer -- but it still has to be bounded, or a
+# wedged call would leak a thread per invocation.
+BRIDGE_TIMEOUT_SECONDS = 90
+
+BRIDGE_ACTIONS = ("resolve", "open", "reply", "reply_all", "forward")
+
+# What the user is told for each 'reason' the bridge can report. The bridge's
+# own 'message' is COM's wording and is appended underneath.
+BRIDGE_REASONS = {
+    "bad_request": "The bridge rejected the request.",
+    "no_outlook": "Could not start Outlook Classic. The Outlook.Application "
+                  "COM server is registered by the classic Win32 client only.",
+    "not_found": "Outlook has no item with that entry_id.\n\n"
+                 "An EntryID is a lease, not an address: Outlook re-keys it "
+                 "when the item moves between stores, so an archived or "
+                 "deleted message no longer resolves. The message_id and "
+                 "time-window fallbacks that would find it are not built yet.",
+    "unsupported_item": "That action does not apply to this kind of item.",
+    "com_error": "Outlook refused the call.",
+}
+
+def bridge_path():
+    """Absolute path to the PowerShell bridge."""
+    return os.path.join(sublime.packages_path(), PACKAGE_NAME, BRIDGE_SCRIPT)
+
+def parse_last_json_line(data):
+    """The bridge's response is the last JSON object it printed on stdout."""
+    text = (data or b"").decode("utf-8", "replace")
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return None
+
+def run_bridge(request, on_done):
+    """Run outlook_bridge.ps1 off the UI thread; call on_done(result, error) on it.
+
+    The request goes through a JSON temp file rather than the command line:
+    subjects and display names carry quotes, '$' and backticks, every one of
+    which is a quoting hazard through cmd -> PowerShell.
+
+    Exactly one of result/error is set. `error` is for the bridge never
+    answering (no PowerShell, no script, a timeout); a bridge that answers
+    reports its own failures inside `result` with an 'ok': false.
+    """
+    def work():
+        result, error, req_path = None, None, None
+        try:
+            fd, req_path = tempfile.mkstemp(suffix=".json", prefix="francis_outlook_")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(request, f)
+
+            startupinfo, creationflags = None, 0
+            if sublime.platform() == "windows":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                creationflags = CREATE_NO_WINDOW
+
+            proc = subprocess.Popen(
+                [POWERSHELL, "-NoProfile", "-NonInteractive",
+                 "-ExecutionPolicy", "Bypass", "-File", bridge_path(),
+                 "-RequestPath", req_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
+            try:
+                out, err = proc.communicate(timeout=BRIDGE_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out, err = proc.communicate()
+                out = b""
+                error = "Outlook did not respond within {0} seconds.".format(
+                    BRIDGE_TIMEOUT_SECONDS
+                )
+
+            if error is None:
+                result = parse_last_json_line(out)
+                if result is None:
+                    # The bridge routes every exit through Emit, so an
+                    # unparseable stdout means it never ran at all.
+                    error = (err or out or b"").decode("utf-8", "replace").strip() \
+                        or "The bridge produced no response."
+        except Exception as e:
+            error = str(e)
+        finally:
+            if req_path:
+                try:
+                    os.unlink(req_path)
+                except OSError:
+                    pass
+        sublime.set_timeout(lambda: on_done(result, error), 0)
+
+    threading.Thread(target=work, daemon=True).start()
 
 def clean_name(value):
     """Unwrap a '[[@Person Name]]' wiki link written by the Outlook macro."""
@@ -883,5 +1003,96 @@ class BrowseEmailsCommand(sublime_plugin.WindowCommand):
         if not path:
             return
         restore_preview_folds(self.window.open_file(path))
+
+
+# ---------------------------
+# Command 7: Act on the Outlook item a note came from
+# ---------------------------
+
+# How a completed action is reported in the status bar.
+ACTION_DONE = {
+    "resolve": "resolved",
+    "open": "opened",
+    "reply": "reply window open for",
+    "reply_all": "reply-all window open for",
+    "forward": "forward window open for",
+}
+
+class OutlookMailActionCommand(sublime_plugin.TextCommand):
+    """
+    Open, reply to, reply-all to or forward the live Outlook item this note was
+    exported from.
+
+    args: {"action": "resolve" | "open" | "reply" | "reply_all" | "forward"}
+
+    Parameterised by args rather than split into five near-identical classes,
+    the same shape as open_frontmatter_symbol.
+
+    Resolution is entry_id + store_id and nothing else -- one O(1)
+    GetItemFromID. store_id is not decoration: without it Outlook searches only
+    the default store, so anything in an archive or a shared mailbox resolves to
+    nothing. The macro writes both.
+
+    A note with no entry_id is not an error in the code -- notes exported before
+    the macro started writing the 'outlook:' block have none, and sent notes
+    never get one, because .Send re-keys the item. Nor is a note whose message
+    has since been archived: Outlook re-keys the EntryID on a move between
+    stores. Both report and stop; the message_id and time-window search tiers
+    that would cover them are deliberately not built yet.
+
+    'resolve' touches nothing and is the safe probe: it exercises the whole path
+    and composes no window. Its full response goes to the console.
+    """
+    def run(self, edit, action="open"):
+        if action not in BRIDGE_ACTIONS:
+            sublime.error_message("Unknown Outlook action: {0}".format(action))
+            return
+
+        content = self.view.substr(sublime.Region(0, self.view.size()))
+        frontmatter = parse_frontmatter(content)
+        if frontmatter is None:
+            sublime.error_message("No YAML frontmatter found in this file.")
+            return
+
+        refs = outlook_refs(frontmatter)
+        if not refs.get("entry_id"):
+            sublime.error_message(
+                "This note carries no Outlook entry_id.\n\n"
+                "Notes exported before the macro started writing the 'outlook:' "
+                "block have none, and sent notes never get one. Use "
+                "'Reply to email' for those -- it composes via mailto, which "
+                "does not thread but needs nothing from Outlook."
+            )
+            return
+
+        sublime.status_message("Outlook: {0}...".format(action.replace("_", " ")))
+        run_bridge(
+            {
+                "action": action,
+                "entry_id": refs["entry_id"],
+                "store_id": refs.get("store_id", ""),
+            },
+            lambda result, error: self.on_done(action, result, error)
+        )
+
+    def on_done(self, action, result, error):
+        if error:
+            sublime.error_message("Could not reach Outlook.\n\n{0}".format(error))
+            return
+
+        print("outlook_mail_action ({0}): {1}".format(action, result))
+
+        if not result.get("ok"):
+            reason = result.get("reason", "com_error")
+            sublime.error_message("{0}\n\n{1}".format(
+                BRIDGE_REASONS.get(reason, reason),
+                result.get("message", "")
+            ).strip())
+            return
+
+        sublime.status_message("Outlook: {0} {1}".format(
+            ACTION_DONE.get(action, action),
+            collapse_whitespace(result.get("subject") or "(no subject)")
+        ))
 
 

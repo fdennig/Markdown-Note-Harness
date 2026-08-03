@@ -33,14 +33,40 @@
       "caption": "Email: Browse",
       "command": "browse_emails"
     },
-    {
-      "caption": "Email: Browse to-reply",
-      "command": "open_frontmatter_symbol",
-      "args": { "symbol": "toreply_note", "label": "to-reply", "pick": true }
-    },
+    // {
+    //   "caption": "Email: Browse to-reply",
+    //   "command": "open_frontmatter_symbol",
+    //   "args": { "symbol": "toreply_note", "label": "to-reply", "pick": true }
+    // },
     {
       "caption": "Email: Open all to-reply",
       "command": "open_frontmatter_symbol",
       "args": { "symbol": "toreply_note", "label": "to-reply", "pick": false }
+    },
+    {
+      "caption": "Email: Open original in Outlook",
+      "command": "outlook_mail_action",
+      "args": { "action": "open" }
+    },
+    // {
+    //   "caption": "Email: Reply in Outlook",
+    //   "command": "outlook_mail_action",
+    //   "args": { "action": "reply" }
+    // },
+    // {
+    //   "caption": "Email: Reply all in Outlook",
+    //   "command": "outlook_mail_action",
+    //   "args": { "action": "reply_all" }
+    // },
+    // {
+    //   "caption": "Email: Forward in Outlook",
+    //   "command": "outlook_mail_action",
+    //   "args": { "action": "forward" }
+    // },
+    {
+      // Touches nothing in Outlook -- the safe probe when a note will not open.
+      "caption": "Email: Resolve in Outlook (diagnostic)",
+      "command": "outlook_mail_action",
+      "args": { "action": "resolve" }
     }
 ]
