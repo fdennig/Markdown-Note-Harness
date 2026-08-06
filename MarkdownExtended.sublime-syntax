@@ -12,7 +12,7 @@ contexts:
     - meta_prepend: true
 
     # Unchecked List Start: Push Stack [List Container, Line Logic]
-    - match: ([ \t]*)([*+-])((?:[ ](\[)([ ])(\]))\s)
+    - match: ([ \t]*)([*+-])((?:[ ](\[)([ ])(\]))[ \t])
       captures:
         1: markup.list.unnumbered.markdown
         2: markup.list.unnumbered.bullet.markdown punctuation.definition.list_item.markdown
@@ -28,7 +28,7 @@ contexts:
     - meta_prepend: true
     
     # Unchecked Subsequent Item: Push ONLY Line Logic (Container already active)
-    - match: ([ \t]*)([*+-])((?:[ ](\[)([ ])(\]))\s)
+    - match: ([ \t]*)([*+-])((?:[ ](\[)([ ])(\]))[ \t])
       captures:
         1: markup.list.unnumbered.markdown
         2: markup.list.unnumbered.bullet.markdown punctuation.definition.list_item.markdown
@@ -42,28 +42,24 @@ contexts:
     # which is exactly what you want (they won't get your symbol scope).
 
   todo-item-unchecked:
-    - match: '!\s'
-      push: todo-item-urgent
-      pop: true
-    - match: $
-      pop: true
+    - match: '(!)[ \t]'
+      captures:
+        1: keyword.other.todo.urgent.markdown
+      set: todo-item-urgent
     - match: ''
-      push: todo-item-normal
-      pop: true
+      set: todo-item-normal
 
   todo-item-normal:
     - meta_scope: entity.name.tag.todo.open.markdown
-    - match: $
-      pop: true
-    - include: scope:text.html.markdown#inlines
+    - match: '[ \t]*$'
+      pop: 1
+    - include: inlines
 
   todo-item-urgent:
     - meta_scope: entity.name.tag.todo.urgent.markdown
-    - match: $
-      pop: true
-    - include: scope:text.html.markdown#inlines
-
-  
+    - match: '[ \t]*$'
+      pop: 1
+    - include: inlines
 
   frontmatter:
     - meta_prepend: true

@@ -13,15 +13,13 @@
         <integer>1</integer>
         <key>symbolTransformation</key>
         <string>
-            s/^\s*[\*\+\-]\s*\[\s\]\s*//;  # Remove bullet and [ ]
-            s/^\s+//;                       # Trim leading whitespace
-            s/\s+$//;                       # Trim trailing whitespace
+            s/\!?\[([^]]+)\]\([^)]*\)/$1/g;     # strip image or link urls
+            s/\[([^]]+)\]\[[^]]*\]/$1/g;        # strip reference urls
         </string>
         <key>symbolIndexTransformation</key>
         <string>
-            s/^\s*[\*\+\-]\s*\[\s\]\s*//;
-            s/^\s+//;
-            s/\s+$//;
+            s/\!?\[([^]]+)\]\([^)]*\)/$1/g;     # strip image or link urls
+            s/\[([^]]+)\]\[[^]]*\]/$1/g;        # strip reference urls
         </string>
         <key>kind</key>
         <string>markup.list</string>
