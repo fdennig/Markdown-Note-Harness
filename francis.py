@@ -526,39 +526,60 @@ class OpenLinkedFileCommand(sublime_plugin.TextCommand):
     Open Markdown links [text](url_or_file) under caret.
     Resolves relative paths relative to the Markdown file automatically.
     """
+
+    # The syntax scopes the target of an inline link and nothing else with this
+    # (Markdown.sublime-syntax: link-inline-url-unquoted and -angled, which
+    # MarkdownExtended inherits). Reading it off the scope map is not a
+    # refinement of scanning for ')' -- it is the only way to get the end of the
+    # target right. A bare target may contain BALANCED parentheses, which the
+    # syntax tracks (link-url-unquoted-parens) and a search for the first ')'
+    # cannot: SharePoint folder names like '0A Initiative wide documents
+    # (workplan,concept,governance)' and filenames like 'report (1).pdf' both
+    # used to be cut off mid-URL, and a truncated https:// link is opened
+    # silently at the wrong address.
+    TARGET_SELECTOR = "markup.underline.link"
+
+    # From the caret to the start of the target: the rest of the link
+    # description, then ']', '(' and -- for the '<...>' form that lets a target
+    # carry spaces -- the '<', which is punctuation and so sits outside the
+    # scoped target. Anything else means the nearest target belongs to some
+    # other link, not to the one under the caret.
+    BETWEEN_RE = re.compile(r'^[^\n\[\]]*\]\(\s*<?$')
+
     def run(self, edit):
         for region in self.view.sel():
             pt = region.begin()
-
-            # Search backward for opening '['
-            text_before = self.view.substr(sublime.Region(0, pt))
-            start = text_before.rfind("[")
-            if start == -1:
+            path = self.link_target(pt)
+            if path is None:
                 print("No Markdown link under caret")
+                sublime.status_message("No Markdown link under caret")
                 continue
-
-            # Search forward for closing ')'
-            text_after = self.view.substr(sublime.Region(pt, self.view.size()))
-            close_idx = text_after.find(")")
-            if close_idx == -1:
-                print("No Markdown link under caret")
-                continue
-            end = pt + close_idx
-
-            # Extract the full link region
-            link_region = sublime.Region(start, end + 1)
-            full_link = self.view.substr(link_region)
-
-            # Extract the path inside parentheses
-            m = re.search(r"\((.*?)\)", full_link)
-            if not m:
-                print("No path found in link")
-                continue
-
-            path = m.group(1).strip("(<\">)")
 
             print("Resolved link: {0}".format(path))
             open_file(path)
+
+    def link_target(self, pt):
+        """The target of the inline link whose description holds pt, or None."""
+        for target in self.view.find_by_selector(self.TARGET_SELECTOR):
+            if target.end() < pt:
+                continue
+            # Caret already inside the target: F12 on the URL itself.
+            if target.begin() <= pt:
+                return self.clean(target)
+            between = self.view.substr(sublime.Region(pt, target.begin()))
+            if self.BETWEEN_RE.match(between):
+                return self.clean(target)
+            return None
+        return None
+
+    def clean(self, target):
+        # Only the '<' '>' are punctuation to the syntax, so a target the Outlook
+        # export writes as <"C:\Some Folder\file.docx"> arrives with its quotes
+        # still attached.
+        path = self.view.substr(target).strip()
+        if len(path) > 1 and path[0] == path[-1] and path[0] in "\"'":
+            path = path[1:-1]
+        return path
 
 # ---------------------------
 # Command 2: Open frontmatter attachment
