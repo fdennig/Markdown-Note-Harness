@@ -43,12 +43,21 @@ contexts:
     # Frontmatter flags, scoped as whole 'key: value' pairs rather than as the
     # key or the value alone. Symbol List - Email Flags.tmPreferences indexes
     # this scope and rewrites each pair into its own token (toreply_note,
-    # email_note, ...), which is what window.symbol_locations() looks up.
+    # email_note, topic_note, ...), which is what window.symbol_locations()
+    # looks up.
     #
-    # Values are pinned, so the macro's empty 'toreply: ', 'personal: ' and
-    # 'priority: ' lines never match and never reach the index. Keep this list
-    # and the transformation list in the .tmPreferences in step.
-    - match: ^\s*((?:toreply|personal|sent)\s*:\s*true|priority\s*:\s*high|class\s*:\s*(?:email|meeting))\s*$
+    # The boolean flags pin their values, so the macro's empty 'toreply: ',
+    # 'personal: ' and 'priority: ' lines never match and never reach the
+    # index. Keep those and the transformation list in the .tmPreferences in
+    # step.
+    #
+    # 'class' does NOT pin its value: any word is matched and the
+    # .tmPreferences rewrites it to '<value>_note' with a capture. That is what
+    # lets TodoSync scope its sweep to a configurable set of classes -- adding
+    # 'class: topic' to a note makes it findable as 'topic_note' with no change
+    # to this package. 'class: email' still yields 'email_note', so the email
+    # commands are unaffected.
+    - match: ^\s*((?:toreply|personal|sent)\s*:\s*true|priority\s*:\s*high|class\s*:\s*[A-Za-z0-9_-]+)\s*$
       captures:
         1: entity.name.email.flag.yaml
 

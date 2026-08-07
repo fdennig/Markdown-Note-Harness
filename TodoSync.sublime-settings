@@ -1,0 +1,58 @@
+{
+    // Which notes TodoSync sweeps for todos.
+    //
+    // Edit your copy in Packages/User/TodoSync.sublime-settings rather than
+    // this file, so a package update does not overwrite it.
+    // (Preferences > Browse Packages, then User/.)
+
+    // A note is swept when its frontmatter carries one of these classes:
+    //
+    //     ---
+    //     class: topic
+    //     ---
+    //
+    // Scope is resolved through the symbol index -- each class C is looked up
+    // as window.symbol_locations("C_note") -- so notes are never opened just
+    // to find out whether they are in scope. That is what keeps the ~1700
+    // email notes out of the sweep for free.
+    //
+    // Adding a class here is all that is needed; the token is produced
+    // automatically by Symbol List - Email Flags.tmPreferences. Sublime has to
+    // index the note first, so a freshly classified note appears a moment
+    // after it is saved rather than instantly.
+    "classes": ["topic", "activity", "programme", "person"],
+
+    // Swept regardless of class. Paths are relative to the folder holding the
+    // overview, or absolute. No globs -- these are resolved without walking
+    // the vault. The overview itself is always swept (its capture zone is a
+    // real note) and does not need listing here.
+    "always_include": [],
+
+    // Skipped even when classed. fnmatch globs, tested against both the file
+    // name and the full path. Templates carry a class but their checkboxes are
+    // placeholders, not todos.
+    "exclude": ["*_template.md"],
+
+    // Where the overview lives. Leave empty to look for a file named
+    // "todoUNDP.md" in the root of each folder open in the window.
+    "overview": "",
+
+    // Fail-safe. Sublime's symbol index is rebuilt in the background -- after
+    // an upgrade, a crash, or a syntax change -- and reports nothing while it
+    // does, which could blank the overview.
+    //
+    // The first line of defence is not this setting: a note already in the
+    // cache with a class listed above stays in scope whatever the index says,
+    // so a cold index normally changes nothing at all. This only catches the
+    // remaining case -- no cache *and* no index -- by refusing to render when
+    // the sweep finds no notes but the cache remembered some.
+    //
+    // Note it is not proportional: narrowing "classes" is meant to shrink the
+    // scope, and a ratio test would misread that as a fault.
+    "guard_empty_scope": true,
+
+    // Write a line per sweep to Data/Logs/TodoSync.log. Useful while working
+    // through the classification transition; noisy afterwards. Saves of notes
+    // outside the classes above are not logged, because they are not swept.
+    "verbose": true
+}

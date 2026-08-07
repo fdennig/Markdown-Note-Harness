@@ -17,9 +17,10 @@ map.
 | file | what it does |
 |---|---|
 | `francis.py` | Markdown link and attachment opening, Office→Markdown conversion, email browsing, and the Outlook actions |
-| `TodoSync.py` | Collects unchecked todos across the vault into `todoUNDP.md` and writes resolutions back to the source files |
+| `TodoSync.py` | Sweeps unchecked todos out of classified notes into `todoUNDP.md` and writes resolutions back to the source notes |
+| `TodoSync.sublime-settings` | Which note classes get swept. Override it in `Packages/User/` |
 | `outlook_bridge.ps1` | PowerShell COM bridge to Outlook Classic. Inert to Sublime; reached only via `subprocess` from `francis.py` |
-| `MarkdownExtended.sublime-syntax` | Adds a scope for unchecked todos so they reach the symbol index |
+| `MarkdownExtended.sublime-syntax` | Adds a scope for unchecked todos, for colour and the per-file symbol list |
 | `YAMLEmailFrontmatter.sublime-syntax` | Adds scopes for the email frontmatter fields the macro writes |
 | `Symbol List - *.tmPreferences` | Rewrites those scopes into the `_note` symbol tokens the commands look up |
 | `outlook_macros/` | The VBA that produces the email notes, imported by `git subtree`. Runs in Outlook, not in Sublime |
@@ -47,8 +48,32 @@ All are in the command palette; the ones with a keybinding say so.
 
 **Todos**
 
-- *Markdown: Collect TODOs* / *Markdown: Resolve Checked TODOs*. Also run
-  automatically on save, close and load of `todoUNDP.md`.
+The notes are the source of truth. `todoUNDP.md` is re-derived from them on every
+save; a todo ticked in either place is ticked in the other.
+
+- *Todos: Sweep now* — rebuild the overview. Runs automatically on save of any
+  Markdown file, and on load of `todoUNDP.md`.
+- *Todos: Apply overview edits* — push ticks and `!` toggles from the overview back
+  into the notes. Runs automatically on save of `todoUNDP.md`.
+- *Todos: Show scope* — which notes are being swept, and why. The one to reach for
+  while classifying.
+- *Todos: Rebuild cache* — throw away the derived cache and re-read everything.
+
+A note is swept when its frontmatter `class:` is listed in
+`TodoSync.sublime-settings` — `topic`, `activity`, `programme` to start with.
+Adding a class is a frontmatter edit plus a settings edit; no code change, and a
+note classified for the first time shows up on the save that classified it.
+
+Saving anything else — an email note, an unclassified note, a template — does
+nothing at all: the class is read from the buffer, so there is no index lookup and
+no file read. And a sweep that finds no change doesn't rewrite `todoUNDP.md`, so
+there is no OneDrive churn and an open overview isn't reverted under your cursor.
+
+`todoUNDP.md` has three zones: a hand-written `# Capture` zone at the top (swept
+like any other note, so quick capture needs no special case), the generated zone
+between the `todosync:` markers, and `## Completed` at the bottom. Only the middle
+one is ever rewritten, so pruning `- [x]` lines out of your notes does not disturb
+the history.
 
 **Other**
 

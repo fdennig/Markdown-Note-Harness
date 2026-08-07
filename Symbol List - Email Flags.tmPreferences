@@ -21,15 +21,22 @@
              "email", which can collide with identically named symbols indexed
              from other files: symbol lookup matches on name alone and offers
              no scope filter. Every pair the syntax rule matches has a line
-             here; anything missing falls through under its raw text. -->
+             here; anything missing falls through under its raw text.
+
+             The boolean flags are enumerated because their values are pinned
+             in the syntax. 'class' is not: one capturing substitution turns
+             any 'class: X' into 'X_note', so a class invented in a note is
+             findable via window.symbol_locations("X_note") without touching
+             this file. TodoSync.sublime-settings names the classes it sweeps.
+             'class: email' still yields 'email_note', which francis.py's email
+             commands depend on, as they do on 'toreply_note'. -->
         <key>symbolIndexTransformation</key>
         <string><![CDATA[
             s/^toreply\s*:\s*true$/toreply_note/;
             s/^personal\s*:\s*true$/personal_note/;
             s/^sent\s*:\s*true$/sent_note/;
             s/^priority\s*:\s*high$/priority_note/;
-            s/^class\s*:\s*email$/email_note/;
-            s/^class\s*:\s*meeting$/meeting_note/;
+            s/^class\s*:\s*([A-Za-z0-9_-]+)$/$1_note/;
         ]]></string>
     </dict>
 </dict>

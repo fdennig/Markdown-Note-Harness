@@ -1,1016 +1,836 @@
+"""TodoSync -- mirrors unchecked todos from classified notes into todoUNDP.md.
+
+The notes are the source of truth. Every pass re-derives the overview from
+them; nothing about *which todos exist* is stored anywhere else. The previous
+implementation accumulated todos into todo.yml one saved file at a time, which
+meant it could neither see the vault nor forget a deleted line.
+
+    scope    window.symbol_locations("<class>_note") for each configured class
+    sweep    os.stat each path; read only what changed; one regex per file
+    diff     against the cache -> what was ticked in its own note
+    render   rewrite only the generated zone of todoUNDP.md
+
+and in reverse, when todoUNDP.md is saved: ticks and "!" toggles inside the
+generated zone are written back into the source notes, then the whole thing is
+swept and rendered again.
+
+Two gates keep this cheap enough to run on every save. A saved file is ignored
+outright unless its own frontmatter class is one we sweep (see watched()), so
+saving an email note costs a single regex. And the overview is only written
+when the rendered content actually differs, so a sweep that finds nothing new
+touches no files at all.
+
+The cache (todoUNDP.cache.json) is derived, never authoritative -- delete it
+and the next sweep rebuilds it identically. It exists to gate reads on
+(mtime, size), and to locate the source line behind an overview line without
+putting a path into the wiki link.
+
+Runs on the 3.3 plugin host: str.format(), no f-strings.
+"""
+
 import sublime
 import sublime_plugin
-import os
-import json
+
 import datetime
+import fnmatch
+import json
+import os
 import re
 
-MARKDOWN_EXT = ".md"
-TODO_YAML = "todo.yml"
-TODO_MD = "todoUNDP.md"
-TODO_PARENT_DIR = "UNDPnotes"
+SETTINGS_FILE = "TodoSync.sublime-settings"
+OVERVIEW_NAME = "todoUNDP.md"
+CACHE_NAME = "todoUNDP.cache.json"
 
-EXCLUDE_FOLDERS = [
-    "emails",
-]
+# The generated zone is delimited by markers rather than by heading names, so
+# the generator can rewrite one region and copy the others through untouched.
+BEGIN_MARK = "<!-- todosync:begin -- generated below, edits here are overwritten -->"
+END_MARK = "<!-- todosync:end -->"
+BEGIN_RE = re.compile(r"^<!--\s*todosync:begin\b.*-->\s*$")
+END_RE = re.compile(r"^<!--\s*todosync:end\b.*-->\s*$")
+COMPLETED_RE = re.compile(r"^#{1,6}\s+completed\b", re.I)
 
-# ------------------------------
-# Helpers: Logging
-# ------------------------------
+# A checkbox line. Group 3 is the box, group 4 the text.
+TODO_RE = re.compile(r"^([ \t]*)([-*+])[ \t]+\[([ xX])\][ \t]+(\S.*?)[ \t]*$")
+# Urgency is a leading "!", held as a flag rather than as part of the text --
+# so toggling it never changes a todo's identity.
+URGENT_RE = re.compile(r"^!\s+(.*)$")
+CLASS_RE = re.compile(r"^class\s*:\s*([A-Za-z0-9_-]+)\s*$", re.M)
+# Frontmatter only, so a 'class:' in a code block cannot pull a note into scope.
+FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)^(?:---|\.\.\.)[ \t]*\r?\n",
+                            re.S | re.M)
+# The "last updated" line is excluded when deciding whether the overview
+# changed -- otherwise it differs on every render and forces a pointless write.
+STAMP_RE = re.compile(r"^_Updated .*$", re.M)
 
-def get_log_path():
-    """Get the path to the log file in the Sublime Text data directory."""
-    packages_path = sublime.packages_path()
-    parent_dir = os.path.dirname(packages_path)
-    log_dir = os.path.join(parent_dir, "Logs")
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    return os.path.join(log_dir, "TodoSync.log")
+# An overview line: "- [x] ! text [[Source]]". Greedy (.*) so the LAST wiki
+# link is taken as the source and links inside the todo text survive.
+LINE_RE = re.compile(
+    r"^[ \t]*[-*+][ \t]+\[([ xX])\][ \t]+(.*?)(?:[ \t]+\[\[([^\]]*)\]\])?[ \t]*$")
+HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*$")
 
-def log_message(message):
-    """Write a timestamped message to the log file."""
+
+# ------------------------------------------------------------------
+# Settings, logging, small helpers
+# ------------------------------------------------------------------
+
+def settings():
+    return sublime.load_settings(SETTINGS_FILE)
+
+
+def log(message):
+    """Append to Data/Logs/TodoSync.log. Silent if logging itself fails."""
+    if not settings().get("verbose", True):
+        return
     try:
-        log_path = get_log_path()
-        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write("[{}] {}\n".format(timestamp, message))
+        log_dir = os.path.join(os.path.dirname(sublime.packages_path()), "Logs")
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(os.path.join(log_dir, "TodoSync.log"), "a", encoding="utf-8") as f:
+            f.write("[{}] {}\n".format(stamp, message))
     except Exception as e:
-        print("TodoSync: Error writing to log: {}".format(e))
+        print("TodoSync: could not write log: {}".format(e))
 
-# ------------------------------
-# Helpers: File System & YAML
-# ------------------------------
 
-def get_paths(window):
-    if not window:
-        return None, None
-    for folder in window.folders():
-        if os.path.basename(folder) == TODO_PARENT_DIR:
-            return (
-                os.path.join(folder, TODO_YAML),
-                os.path.join(folder, TODO_MD)
-            )
-    return None, None
+def key(path):
+    """Cache key. normcase so Windows' casing cannot split one file in two."""
+    return os.path.normcase(os.path.abspath(path))
 
-def get_parent_folder(window):
-    """Get the TODO_PARENT_DIR folder path for relative path calculation."""
-    if not window:
-        return None
-    for folder in window.folders():
-        if os.path.basename(folder) == TODO_PARENT_DIR:
-            return folder
-    return None
 
-def migrate_database(db):
-    """Migrate old database formats to current schema."""
-    changed = False
-    
-    # Migrate open_todos
-    for todo in db.get("open_todos", []):
-        # Standardize to 'filepath'
-        if 'filename' in todo and 'filepath' not in todo:
-            todo['filepath'] = todo.pop('filename')
-            changed = True
-        elif 'source_file' in todo and 'filepath' not in todo:
-            todo['filepath'] = todo.pop('source_file')
-            changed = True
-        
-        # Ensure filepath exists
-        if 'filepath' not in todo:
-            todo['filepath'] = 'Unknown'
-            changed = True
-        
-        # Ensure created_at exists
-        if 'created_at' not in todo:
-            todo['created_at'] = get_current_date()
-            changed = True
-    
-    # Migrate resolved_todos
-    for todo in db.get("resolved_todos", []):
-        # Standardize to 'filepath'
-        if 'filename' in todo and 'filepath' not in todo:
-            todo['filepath'] = todo.pop('filename')
-            changed = True
-        elif 'source_file' in todo and 'filepath' not in todo:
-            todo['filepath'] = todo.pop('source_file')
-            changed = True
-        
-        # Ensure filepath exists
-        if 'filepath' not in todo:
-            todo['filepath'] = 'Unknown'
-            changed = True
-        
-        # Ensure created_at exists
-        if 'created_at' not in todo:
-            todo['created_at'] = todo.get('resolved_at', get_current_date())
-            changed = True
-    
-    return db, changed
+def display_name(path):
+    """The name a wiki link uses: basename without extension."""
+    return os.path.splitext(os.path.basename(path))[0]
 
-def load_db(path):
-    if not os.path.exists(path):
-        return {"open_todos": [], "resolved_todos": []}
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            if "open_todos" not in data:
-                data["open_todos"] = []
-            if "resolved_todos" not in data:
-                data["resolved_todos"] = []
-            
-            # Apply migration
-            data, changed = migrate_database(data)
-            if changed:
-                print("TodoSync: Migrated database to current schema")
-                save_db(path, data)
-            
-            return data
-    except Exception as e:
-        print("TodoSync: Error loading DB {}".format(e))
-        return {"open_todos": [], "resolved_todos": []}
 
-def save_db(path, data):
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print("TodoSync: Error saving DB {}".format(e))
-
-def get_current_date():
+def today():
     return datetime.date.today().isoformat()
 
-def get_display_name(filepath_relative):
-    """Extract just the filename without extension for display."""
-    if not filepath_relative or filepath_relative == "Unknown":
-        return "Unknown"
-    # Normalize the path and get just the basename
-    try:
-        normalized = os.path.normpath(filepath_relative)
-        basename = os.path.basename(normalized)
-        return os.path.splitext(basename)[0]
-    except Exception as e:
-        log_message("Error in get_display_name: {}".format(e))
-        return "Unknown"
 
-def is_urgent(text):
-    """Check if a todo is marked urgent (starts with !)."""
-    return text.strip().startswith('!')
+def read_lines(path):
+    """Lines *with* their terminators, so rewriting one line cannot convert
+    the rest of a CRLF file to LF behind the user's back."""
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        return f.read().splitlines(True)
 
-# ------------------------------
-# Core Logic: Resolve from Source
-# ------------------------------
 
-def resolve_checked_in_source(window, view):
-    """
-    Scan a source file view for checked todos (- [x]) that match open entries
-    in the database. Resolves them in the DB (but does NOT modify the source file,
-    since the user already checked the box there).
-    """
-    file_path = view.file_name()
-    if not file_path or not file_path.lower().endswith(MARKDOWN_EXT):
-        return 0
+def write_lines(path, lines):
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.writelines(lines)
 
-    for ex in EXCLUDE_FOLDERS:
-        if ex in file_path.replace("\\", "/"):
-            return 0
 
-    yml_path, md_path = get_paths(window)
-    if not yml_path:
-        return 0
+def bare(line):
+    return line.rstrip("\r\n")
 
-    if file_path == md_path:
-        return 0
 
-    parent_folder = get_parent_folder(window)
-    if not parent_folder:
-        return 0
-
-    rel_path = os.path.relpath(file_path, parent_folder)
-    rel_path_no_ext = os.path.splitext(rel_path)[0]
-
-    db = load_db(yml_path)
-    open_todos = db.get("open_todos", [])
-    resolved_db_list = db.get("resolved_todos", [])
-
-    # Get open todos for this file
-    file_todos = [t for t in open_todos if t.get('filepath') == rel_path_no_ext]
-    if not file_todos:
-        return 0
-
-    # Read view content and find all checked items
-    content = view.substr(sublime.Region(0, view.size()))
-    checked_pattern = re.compile(r"^\s*[-*+]\s*\[[xX]\]\s*(.+?)\s*$", re.MULTILINE)
-    checked_texts = set()
-    for m in checked_pattern.finditer(content):
-        checked_texts.add(m.group(1).strip())
-
-    if not checked_texts:
-        return 0
-
-    # Match checked texts against open todos for this file
-    newly_resolved = []
-    for todo in file_todos:
-        todo_text = todo['text']
-        # Check both the exact text and the text without urgency prefix
-        text_to_match = todo_text
-        if todo_text.startswith('!'):
-            text_to_match = todo_text[1:].strip()
-            # Also check with the ! prefix as it appears in the file
-            if todo_text in checked_texts or text_to_match in checked_texts:
-                newly_resolved.append(todo)
-        else:
-            if text_to_match in checked_texts:
-                newly_resolved.append(todo)
-
-    if not newly_resolved:
-        return 0
-
-    # Move matched todos from open to resolved
-    resolved_texts = set()
-    for todo in newly_resolved:
-        is_dupe = False
-        for r in resolved_db_list:
-            if r['text'] == todo['text'] and r.get('filepath') == todo.get('filepath'):
-                is_dupe = True
-                break
-
-        if not is_dupe:
-            resolved_db_list.append({
-                "text": todo['text'],
-                "filepath": todo.get('filepath'),
-                "created_at": todo.get('created_at', get_current_date()),
-                "resolved_at": get_current_date()
-            })
-        resolved_texts.add(todo['text'])
-
-    open_todos = [t for t in open_todos if t['text'] not in resolved_texts]
-    db["open_todos"] = open_todos
-    db["resolved_todos"] = resolved_db_list
-    save_db(yml_path, db)
-
-    print("TodoSync: Resolved {} todos from source file {}".format(len(newly_resolved), rel_path_no_ext))
-    return len(newly_resolved)
-
-# ------------------------------
-# Core Logic: Sync View -> YAML
-# ------------------------------
-
-def sync_view_to_yaml(window, view):
-    file_path = view.file_name()
-    if not file_path or not file_path.lower().endswith(MARKDOWN_EXT):
-        return 0
-    
-    for ex in EXCLUDE_FOLDERS:
-        if ex in file_path.replace("\\", "/"):
-            return 0
-
-    yml_path, md_path = get_paths(window)
-    if not yml_path:
-        return 0
-    
-    if file_path == md_path:
-        return 0
-
-    parent_folder = get_parent_folder(window)
-    if not parent_folder:
-        return 0
-    
-    # Store relative path in YAML for uniqueness
-    rel_path = os.path.relpath(file_path, parent_folder)
-    rel_path_no_ext = os.path.splitext(rel_path)[0]
-    
-    db = load_db(yml_path)
-    all_todos = db.get("open_todos", [])
-    resolved_todos = db.get("resolved_todos", [])
-
-    # Check both open and resolved todos to prevent duplicates
-    existing_texts = set(item['text'] for item in all_todos)
-    resolved_texts = set(item['text'] for item in resolved_todos)
-
-    symbols = view.indexed_symbol_regions()
-    new_todos_count = 0
-    seen_in_view = set()
-
-    for sym_region in symbols:
-        if sym_region.kind[1] == 't':
-            text = sym_region.name.strip()
-            
-            if text in seen_in_view:
-                continue
-            seen_in_view.add(text)
-
-            # Skip if already in open_todos or resolved_todos
-            if text in existing_texts or text in resolved_texts:
-                continue
-            
-            entry = {
-                "text": text,
-                "filepath": rel_path_no_ext,  # Relative path without extension
-                "created_at": get_current_date()
-            }
-            all_todos.append(entry)
-            existing_texts.add(text)
-            new_todos_count += 1
-
-    # Check for urgency updates in existing todos from this file
-    urgency_changed = False
-    for existing_todo in all_todos:
-        if existing_todo['filepath'] == rel_path_no_ext:
-            db_text = existing_todo['text']
-
-            # Skip if the exact text is still in the view (no change)
-            if db_text in seen_in_view:
-                continue
-
-            # Check if urgency changed
-            if db_text.startswith('!'):
-                text_without = db_text[1:].strip()
-                # If the non-urgent version is in the view (and not in resolved)
-                if text_without in seen_in_view and text_without not in resolved_texts:
-                    existing_todo['text'] = text_without
-                    urgency_changed = True
-            else:
-                text_with = "! " + db_text
-                # If the urgent version is in the view (and not in resolved)
-                if text_with in seen_in_view and text_with not in resolved_texts:
-                    existing_todo['text'] = text_with
-                    urgency_changed = True
-
-    if new_todos_count > 0 or urgency_changed:
-        all_todos.sort(key=lambda x: (x['filepath'], x['created_at']))
-        db["open_todos"] = all_todos
-        save_db(yml_path, db)
-
-    return new_todos_count
-
-# ------------------------------
-# Core Logic: Generate Report
-# ------------------------------
-
-def generate_markdown_report(window):
-    log_message("=== generate_markdown_report START ===")
-    
-    yml_path, md_path = get_paths(window)
-    if not yml_path or not md_path:
-        log_message("ERROR: Could not get paths from window")
-        return False
-    
-    log_message("yml_path: {}".format(yml_path))
-    log_message("md_path: {}".format(md_path))
-
-    try:
-        db = load_db(yml_path)
-        log_message("Database loaded successfully")
-    except Exception as e:
-        log_message("ERROR loading database: {}".format(e))
-        return False
-    
-    todos = db.get("open_todos", [])
-    log_message("Total todos loaded: {}".format(len(todos)))
-
-    # Split into urgent and normal
-    urgent_todos = [t for t in todos if is_urgent(t.get('text', ''))]
-    normal_todos = [t for t in todos if not is_urgent(t.get('text', ''))]
-    log_message("Urgent todos: {}, Normal todos: {}".format(len(urgent_todos), len(normal_todos)))
-
-    # Extract existing 'Completed' section (Preserve History)
-    completed_section = []
-    if os.path.exists(md_path):
-        try:
-            with open(md_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-                in_completed = False
-                for line in lines:
-                    if line.strip().lower().startswith("## completed"):
-                        in_completed = True
-                        completed_section.append(line)
-                        continue
-                    if in_completed:
-                        if line.startswith("## ") and not line.startswith("## Completed"):
-                            break
-                        completed_section.append(line)
-            log_message("Completed section extracted: {} lines".format(len(completed_section)))
-        except Exception as e:
-            log_message("ERROR reading completed section: {}".format(e))
-    
-    if not completed_section:
-        completed_section = ["## Completed (History)\n", "\n"]
-        log_message("No existing completed section, using default")
-
-    output = []
-    output.append("# Project TODOs\n")
-    output.append("_Generated from todo.yml on {}_\n\n".format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M')))
-
-    # --- Urgent Section (NEW) ---
-    if urgent_todos:
-        log_message("Processing {} urgent todos".format(len(urgent_todos)))
-        output.append("## Urgent\n\n")
-        for t in urgent_todos:
-            txt = t.get('text', 'Unknown')
-            filepath = t.get('filepath', 'Unknown')
-            try:
-                display_name = get_display_name(filepath)
-                line = "- [ ] {} [[{}]]".format(txt, display_name)
-                output.append(line + "\n")
-            except Exception as e:
-                log_message("ERROR processing urgent todo: {} - {}".format(txt[:50], e))
-        output.append("\n")
-
-    # --- Inbox ---
-    log_message("Processing inbox section")
-    output.append("## Inbox\n\n")
-    if not normal_todos:
-        output.append("_No open todos._\n\n")
-    else:
-        for t in normal_todos:
-            txt = t.get('text', 'Unknown')
-            filepath = t.get('filepath', 'Unknown')
-            try:
-                display_name = get_display_name(filepath)
-                line ="- [ ] {} [[{}]]".format(txt, display_name)
-                output.append(line + "\n")
-            except Exception as e:
-                log_message("ERROR processing inbox todo: {} - {}".format(txt[:50], e))
-    output.append("\n")
-
-    # --- By File ---
-    log_message("Processing by-file section")
-    output.append("# By File\n")
-    files_map = {}
-    for t in todos:  # Include ALL todos (urgent + normal) in By File section
-        filepath = t.get('filepath', 'Unknown')
-        # Skip inbox-only todos (no real source file)
-        if filepath == "todoUNDP":
-            continue
-        if filepath not in files_map:
-            files_map[filepath] = []
-        files_map[filepath].append(t)
-
-    log_message("Files found: {}".format(len(files_map)))
-    sorted_filepaths = sorted(files_map.keys())
-
-    for filepath in sorted_filepaths:
-        try:
-            display_name = get_display_name(filepath)
-            output.append("## {}\n".format(display_name))
-            for t in files_map[filepath]:
-                output.append("- [ ] {}\n".format(t.get('text', '')))
-            output.append("\n")
-        except Exception as e:
-            log_message("ERROR processing file section: {} - {}".format(filepath, e))
-
-    # --- Completed (Preserve Existing) ---
-    log_message("Adding completed section: {} lines".format(len(completed_section)))
-    output.extend(completed_section)
-
-    try:
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.writelines(output)
-        log_message("Report written successfully: {} lines".format(len(output)))
-        log_message("=== generate_markdown_report END (SUCCESS) ===\n")
-        return True
-    except Exception as e:
-        log_message("ERROR writing MD file: {}".format(e))
-        log_message("=== generate_markdown_report END (FAILED) ===\n")
-        return False
-
-# ------------------------------
-# Core Logic: Resolve Todos
-# ------------------------------
-
-def update_source_urgency(window, text_content, filepath_relative):
-    """
-    Updates the source file to mark a todo as urgent by adding ! prefix.
-    """
-    parent_folder = get_parent_folder(window)
-    if not parent_folder:
-        return False
-
-    target_path = os.path.join(parent_folder, filepath_relative + ".md")
-
-    if not os.path.exists(target_path):
-        print("TodoSync Urgency: Source '{}' not found.".format(target_path))
-        return False
-
-    try:
-        with open(target_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        escaped_text = re.escape(text_content)
-        # Match: - [ ] text_content -> - [ ] ! text_content
-        pattern = r"^(\s*[-*+]\s*\[\s*\]\s*)({})".format(escaped_text)
-        new_content, count = re.subn(pattern, r"\1! \2", content, flags=re.MULTILINE)
-
-        if count > 0:
-            with open(target_path, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-            print("TodoSync Urgency: Updated source {}".format(target_path))
-            return True
-        else:
-            print("TodoSync Urgency: Text '{}' not found in {}".format(text_content, target_path))
-            return False
-
-    except Exception as e:
-        print("TodoSync Urgency: Error updating source: {}".format(e))
-        return False
-
-def remove_source_urgency(window, text_content_with_exclaim, filepath_relative):
-    """
-    Updates the source file to remove urgency by removing ! prefix.
-    text_content_with_exclaim should include the "! " prefix.
-    """
-    parent_folder = get_parent_folder(window)
-    if not parent_folder:
-        return False
-
-    target_path = os.path.join(parent_folder, filepath_relative + ".md")
-
-    if not os.path.exists(target_path):
-        print("TodoSync De-urgency: Source '{}' not found.".format(target_path))
-        return False
-
-    try:
-        with open(target_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # text_content_with_exclaim is like "! Task"
-        escaped_text = re.escape(text_content_with_exclaim)
-        # Match: - [ ] ! Task -> - [ ] Task
-        pattern = r"^(\s*[-*+]\s*\[\s*\]\s*)({})".format(escaped_text)
-
-        # Remove the "! " part
-        text_without = text_content_with_exclaim[1:].strip()  # Remove "!"
-        new_content, count = re.subn(pattern, r"\1{}".format(text_without), content, flags=re.MULTILINE)
-
-        if count > 0:
-            with open(target_path, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-            print("TodoSync De-urgency: Updated source {}".format(target_path))
-            return True
-        else:
-            print("TodoSync De-urgency: Text '{}' not found in {}".format(text_content_with_exclaim, target_path))
-            return False
-
-    except Exception as e:
-        print("TodoSync De-urgency: Error updating source: {}".format(e))
-        return False
-
-def resolve_source_file(window, text_content, filepath_relative):
-    """
-    Attempts to find the source file by relative path and check the box in it.
-    """
-    parent_folder = get_parent_folder(window)
-    if not parent_folder:
-        return False
-    
-    # Reconstruct full path from relative path
-    target_path = os.path.join(parent_folder, filepath_relative + ".md")
-    
-    if not os.path.exists(target_path):
-        print("TodoSync Resolve: Source '{}' not found.".format(target_path))
-        return False
-
-    try:
-        with open(target_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        escaped_text = re.escape(text_content)
-        pattern = r"^(\s*[-*+]\s*\[)\s*(\]\s*{})".format(escaped_text)
-        new_content, count = re.subn(pattern, r"\1x\2", content, flags=re.MULTILINE)
-
-        if count > 0:
-            with open(target_path, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-            print("TodoSync Resolve: Updated source {}".format(target_path))
-            return True
-        else:
-            print("TodoSync Resolve: Text '{}' not found in {}".format(text_content, target_path))
-            return False
-
-    except Exception as e:
-        print("TodoSync Resolve: Error updating source: {}".format(e))
-        return False
-
-def process_resolutions(window):
-    yml_path, md_path = get_paths(window)
-    if not yml_path or not md_path:
-        return
-
-    if not os.path.exists(md_path):
-        return
-
-    # 1. READ REPORT FILE
-    with open(md_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    lines = content.splitlines()
-    
-    # 2. SEPARATE CONTENT FROM HISTORY
-    active_lines = []
-    history_lines = []
-    in_history = False
-    
+def eol(lines, fallback="\n"):
+    """The terminator this file already uses."""
     for line in lines:
-        if line.strip().lower().startswith("## completed"):
-            in_history = True
-            history_lines.append(line + "\n")  # Preserve newline
+        if line.endswith("\r\n"):
+            return "\r\n"
+        if line.endswith("\n"):
+            return "\n"
+    return fallback
+
+
+def frontmatter_class(text):
+    """The note's class, read from its frontmatter block. None if unclassified."""
+    block = FRONTMATTER_RE.match(text)
+    if not block:
+        return None
+    found = CLASS_RE.search(block.group(1))
+    return found.group(1) if found else None
+
+
+def excluded(path):
+    name = os.path.basename(path)
+    return any(fnmatch.fnmatch(name, p) or fnmatch.fnmatch(path, p)
+               for p in settings().get("exclude", []))
+
+
+# ------------------------------------------------------------------
+# Locations
+# ------------------------------------------------------------------
+
+def overview_path(window):
+    configured = (settings().get("overview") or "").strip()
+    if configured:
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(configured)))
+    for folder in window.folders():
+        candidate = os.path.join(folder, OVERVIEW_NAME)
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate)
+    return None
+
+
+def cache_path(overview):
+    return os.path.join(os.path.dirname(overview), CACHE_NAME)
+
+
+def load_cache(overview):
+    path = cache_path(overview)
+    if not os.path.exists(path):
+        return {"version": 2, "files": {}}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("version") != 2 or "files" not in data:
+            return {"version": 2, "files": {}}
+        return data
+    except Exception as e:
+        log("cache unreadable, starting empty: {}".format(e))
+        return {"version": 2, "files": {}}
+
+
+def save_cache(overview, cache):
+    try:
+        with open(cache_path(overview), "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=1, ensure_ascii=False)
+    except Exception as e:
+        log("ERROR saving cache: {}".format(e))
+
+
+# ------------------------------------------------------------------
+# Scope -- which notes get swept
+# ------------------------------------------------------------------
+
+# Cache keys of the notes the last sweep covered. Lets on_post_save_async
+# decide whether a saved file can possibly matter without touching the index.
+_scope = set()
+
+
+def in_scope(window, overview):
+    """Absolute paths to sweep. Resolved entirely from the symbol index and
+    the settings; no file is opened and no directory is walked."""
+    conf = settings()
+    found = {}
+
+    for cls in conf.get("classes", []):
+        for loc in window.symbol_locations(cls + "_note"):
+            found[key(loc.path)] = os.path.abspath(loc.path)
+
+    base = os.path.dirname(overview)
+    for entry in conf.get("always_include", []):
+        path = entry if os.path.isabs(entry) else os.path.join(base, entry)
+        if os.path.exists(path):
+            found[key(path)] = os.path.abspath(path)
+
+    # The overview's capture zone is a real note and is always swept.
+    found[key(overview)] = overview
+
+    for k in list(found):
+        if k != key(overview) and excluded(found[k]):
+            del found[k]
+
+    return found
+
+
+# ------------------------------------------------------------------
+# Sweep
+# ------------------------------------------------------------------
+
+def parse(lines, stop_at_marker=False):
+    """Split checkbox lines into unchecked and checked entries.
+
+    stop_at_marker is for the overview itself: only its capture zone is a
+    source of todos. Everything from the generated marker down is either this
+    plugin's own output or the completed history."""
+    unchecked, checked = [], []
+    for row, raw in enumerate(lines):
+        line = bare(raw)
+        if stop_at_marker and BEGIN_RE.match(line):
+            break
+        m = TODO_RE.match(line)
+        if not m:
             continue
-        
-        if in_history:
-            history_lines.append(line + "\n")  # Preserve newline
+        text = m.group(4)
+        urgent = False
+        um = URGENT_RE.match(text)
+        if um:
+            urgent, text = True, um.group(1).strip()
+        if not text:
+            continue
+        if m.group(3) == " ":
+            unchecked.append({"text": text, "row": row, "urgent": urgent})
         else:
-            active_lines.append(line)
+            checked.append({"text": text, "row": row})
+    return unchecked, checked
 
-    # 3. SCAN ACTIVE LINES FOR CHECKS AND INBOX-ONLY TODOS
-    # Pattern for checked: - [x] Text [[DisplayName]]?
-    # Uses greedy (.*) so that the LAST [[...]] is captured as the source link
-    check_pattern = re.compile(r"^\s*[-*+]\s*\[[xX]\]\s*(.*)\s+\[\[([^\]]*)\]\]\s*$")
-    # Fallback for checked with no trailing wikilink
-    check_pattern_no_link = re.compile(r"^\s*[-*+]\s*\[[xX]\]\s*(.+?)\s*$")
-    # Simplified pattern for unchecked: - [ ] Text (trailing wikilink filtered in code below)
-    unchecked_pattern = re.compile(r"^\s*[-*+]\s*\[\s*\]\s*(.+?)\s*$")
-    
-    resolved_in_report = [] 
-    inbox_only_todos = []
-    
-    for line in active_lines:
-        # Check for resolved items (with trailing source wikilink)
-        match_checked = check_pattern.match(line)
-        if match_checked:
-            raw_text = match_checked.group(1).strip()
-            display_name = match_checked.group(2)  # "Note" from [[Note]]
 
-            resolved_in_report.append({
-                "text": raw_text,
-                "display_name": display_name
-            })
+def scan_file(path, is_overview):
+    lines = read_lines(path)
+    unchecked, checked = parse(lines, stop_at_marker=is_overview)
+    return {
+        "path": path,
+        "class": frontmatter_class("".join(lines[:40])),
+        "unchecked": unchecked,
+        "checked": checked,
+    }
+
+
+def sweep(window, overview, force=False, extra=None):
+    """Refresh the cache. Returns (cache, completed, aborted).
+
+    completed is what moved from unchecked to checked in its own note since
+    the last sweep -- the half of the round trip that needs no matching at all.
+
+    extra is a path the caller knows qualifies but the index may not list yet.
+    """
+    global _scope
+    cache = load_cache(overview)
+    old = cache["files"]
+    scope = in_scope(window, overview)
+
+    # The index is not the only witness. A note already recorded with a
+    # qualifying class stays in scope even while the index is catching up or
+    # cold; if its class is genuinely gone, the re-scan below records that and
+    # the next sweep drops it. Together with `extra`, this is what lets a note
+    # classified for the first time show up on the save that classified it.
+    classes = settings().get("classes", [])
+    for k, record in old.items():
+        path = record.get("path")
+        if k not in scope and record.get("class") in classes and path \
+                and not excluded(path) and os.path.exists(path):
+            scope[k] = path
+    if extra and key(extra) not in scope and not excluded(extra):
+        scope[key(extra)] = os.path.abspath(extra)
+
+    _scope = set(scope)
+
+    # Never build a generated zone out of nothing. The retention above already
+    # survives a cold index whenever the cache has anything in it, so this can
+    # only trip on a genuinely cold start: no cache, and an index still
+    # building. Deliberately *not* a proportional test -- narrowing "classes"
+    # is supposed to shrink the scope, and a ratio would read that as a fault.
+    notes = [k for k in scope if k != key(overview)]
+    remembered = [k for k in old if k != key(overview)]
+    if settings().get("guard_empty_scope", True) and remembered and not notes:
+        log("ABORT: scope empty but cache held {} notes -- index looks cold"
+            .format(len(remembered)))
+        return cache, [], True
+
+    fresh = {}
+    completed = []
+    reads = 0
+
+    for k, path in scope.items():
+        try:
+            st = os.stat(path)
+        except OSError:
             continue
 
-        # Check for resolved items (no trailing wikilink - inbox-only)
-        match_checked_no_link = check_pattern_no_link.match(line)
-        if match_checked_no_link:
-            raw_text = match_checked_no_link.group(1).strip()
-
-            resolved_in_report.append({
-                "text": raw_text,
-                "display_name": None
-            })
+        prev = old.get(k)
+        if not force and prev and prev.get("mtime") == st.st_mtime \
+                and prev.get("size") == st.st_size:
+            fresh[k] = prev
             continue
 
-        # Check for inbox-only unchecked todos (simplified regex)
-        match_unchecked = unchecked_pattern.match(line)
-        if match_unchecked:
-            text_content = match_unchecked.group(1).strip()
-            # Skip lines with trailing wikilink (handled by unchecked_with_source_pattern)
-            if not re.search(r"\[\[[^\]]*\]\]\s*$", line):
-                inbox_only_todos.append(text_content)
-
-    # LOAD DATABASE
-    db = load_db(yml_path)
-    open_todos = db.get("open_todos", [])
-    resolved_db_list = db.get("resolved_todos", [])
-    
-    newly_resolved_entries = []
-    updates_made = False
-
-    # 4. HANDLE INBOX-ONLY TODOS (Add to open_todos if not present)
-    existing_texts = set(item['text'] for item in open_todos)
-
-    for inbox_text in inbox_only_todos:
-        # Check if this is an urgency update (starts with !)
-        if inbox_text.startswith('!'):
-            text_without_exclaim = inbox_text[1:].strip()
-            # Check if the non-urgent version exists
-            matching_entry = None
-            for t in open_todos:
-                if t['text'] == text_without_exclaim and t.get('filepath') == "todoUNDP":
-                    matching_entry = t
-                    break
-
-            if matching_entry:
-                # Update existing entry to be urgent
-                matching_entry['text'] = inbox_text
-                existing_texts.discard(text_without_exclaim)
-                existing_texts.add(inbox_text)
-                updates_made = True
-                continue
-
-        # Normal flow: add if not present
-        if inbox_text not in existing_texts:
-            entry = {
-                "text": inbox_text,
-                "filepath": "todoUNDP",  # Special marker for inbox-sourced
-                "created_at": get_current_date()
-            }
-            open_todos.append(entry)
-            existing_texts.add(inbox_text)
-            updates_made = True
-
-    # 4B. HANDLE URGENCY UPDATES FOR SOURCE-FILE TODOS
-    # Pattern for unchecked with wikilink: - [ ] Text [[DisplayName]]
-    unchecked_with_source_pattern = re.compile(r"^\s*[-*+]\s*\[\s*\]\s*(.*)\s+\[\[([^\]]*)\]\]\s*$")
-
-    for line in active_lines:
-        match = unchecked_with_source_pattern.match(line)
-        if match:
-            text_content = match.group(1).strip()
-            display_name = match.group(2).strip()
-
-            # Only process if it starts with ! (potential urgency update)
-            if text_content.startswith('!'):
-                text_without_exclaim = text_content[1:].strip()
-
-                # Find matching entry without !
-                for t in open_todos:
-                    if t['text'] == text_without_exclaim:
-                        # Verify it matches by display name
-                        if get_display_name(t.get('filepath')) == display_name:
-                            # Update database
-                            t['text'] = text_content
-                            updates_made = True
-
-                            # Update source file
-                            source_filepath = t.get('filepath')
-                            if source_filepath and source_filepath != "todoUNDP":
-                                update_source_urgency(window, text_without_exclaim, source_filepath)
-                            break
-
-    # 4C. HANDLE DE-URGENCY UPDATES (Removing ! from urgent todos)
-    # Check inbox-only todos
-    for inbox_text in inbox_only_todos:
-        # Check if this is NOT urgent (doesn't start with !)
-        if not inbox_text.startswith('!'):
-            # Check if the urgent version exists in database
-            text_with_exclaim = "! " + inbox_text
-            matching_entry = None
-            for t in open_todos:
-                if t['text'] == text_with_exclaim and t.get('filepath') == "todoUNDP":
-                    matching_entry = t
-                    break
-
-            if matching_entry:
-                # Update existing entry to be non-urgent
-                matching_entry['text'] = inbox_text
-                updates_made = True
-
-    # Check source-file todos for de-urgency
-    for line in active_lines:
-        match = unchecked_with_source_pattern.match(line)
-        if match:
-            text_content = match.group(1).strip()
-            display_name = match.group(2).strip()
-
-            # Only process if it does NOT start with ! (potential de-urgency update)
-            if not text_content.startswith('!'):
-                text_with_exclaim = "! " + text_content
-
-                # Find matching entry with !
-                for t in open_todos:
-                    if t['text'] == text_with_exclaim:
-                        # Verify it matches by display name
-                        if get_display_name(t.get('filepath')) == display_name:
-                            # Update database
-                            t['text'] = text_content
-                            updates_made = True
-
-                            # Update source file
-                            source_filepath = t.get('filepath')
-                            if source_filepath and source_filepath != "todoUNDP":
-                                remove_source_urgency(window, text_with_exclaim, source_filepath)
-                            break
-
-    # 5. HANDLE RESOLUTIONS
-    for item in resolved_in_report:
-        text_to_resolve = item["text"]
-        
-        # FIND ORIGINAL IN DB
-        original_entry = None
-        for t in open_todos:
-            if t['text'] == text_to_resolve:
-                original_entry = t
-                break
-        
-        if not original_entry:
+        try:
+            record = scan_file(path, k == key(overview))
+        except Exception as e:
+            log("ERROR reading {}: {}".format(path, e))
+            if prev:
+                fresh[k] = prev
             continue
-            
-        source_filepath = original_entry.get('filepath')
-        created_at = original_entry.get('created_at', get_current_date())
-        
-        # A. Add to Resolved DB
-        new_resolve_entry = {
-            "text": text_to_resolve,
-            "filepath": source_filepath,  # Store full relative path
-            "created_at": created_at, 
-            "resolved_at": get_current_date()
-        }
-        
-        is_dupe_res = False
-        for r in resolved_db_list:
-            if r['text'] == text_to_resolve and r.get('filepath') == source_filepath:
-                is_dupe_res = True
-                break
-        
-        if not is_dupe_res:
-             resolved_db_list.append(new_resolve_entry)
-             newly_resolved_entries.append(new_resolve_entry)
-             updates_made = True
 
-             # B. Update Source File (if external)
-             if source_filepath and source_filepath != "todoUNDP":
-                 resolve_source_file(window, text_to_resolve, source_filepath)
-    
-    # 6. COMMIT CHANGES
-    if updates_made:
-        resolved_texts = set(r['text'] for r in resolved_in_report)
-        open_todos = [t for t in open_todos if t['text'] not in resolved_texts]
-        
-        db["open_todos"] = open_todos
-        db["resolved_todos"] = resolved_db_list
-        save_db(yml_path, db)
-        
-        # 7. APPEND TO HISTORY
-        if not history_lines:
-            history_lines = ["### Completed (History)\n", "\n"]
-        
-        # Find the header and ensure there's a blank line after it
-        header_index = 0
-        insert_index = 1  # Default: insert after first line (which should be blank)
-        
-        for i, hline in enumerate(history_lines):
-            if hline.strip().lower().startswith("## completed"):
-                header_index = i
-                # Check if next line is blank
-                if i + 1 < len(history_lines):
-                    if history_lines[i + 1].strip() == "":
-                        insert_index = i + 2  # Insert after blank line
-                    else:
-                        insert_index = i + 1  # Insert right after header, will add blank
-                        history_lines.insert(i + 1, "\n")  # Add missing blank line
-                else:
-                    # No line after header, add blank line
-                    history_lines.append("\n")
-                    insert_index = i + 2
-                break
-        
-        insertion_lines = []
-        for r in newly_resolved_entries:
-            txt = r.get('text', '')
-            filepath = r.get('filepath', '')
-            date_res = r.get('resolved_at', '')
-            
-            if filepath and filepath != "todoUNDP":
-                display_name = get_display_name(filepath)
-                line = "- [x] {} [[{}]] <!-- resolved: {} -->\n".format(txt, display_name, date_res)
+        reads += 1
+        record["mtime"] = st.st_mtime
+        record["size"] = st.st_size
+        fresh[k] = record
+
+        if prev:
+            was_open = dict((e["text"], e) for e in prev.get("unchecked", []))
+            for entry in record["checked"]:
+                if entry["text"] in was_open:
+                    completed.append({
+                        "text": entry["text"],
+                        "urgent": was_open[entry["text"]].get("urgent", False),
+                        "source": display_name(path),
+                    })
+
+    cache["files"] = fresh
+    save_cache(overview, cache)
+    log("sweep: {} in scope, {} read, {} completed in their notes"
+        .format(len(scope), reads, len(completed)))
+    return cache, completed, False
+
+
+# ------------------------------------------------------------------
+# Render
+# ------------------------------------------------------------------
+
+def split_zones(lines):
+    """(capture, generated, tail).
+
+    Falls back for a file written before the markers existed: everything above
+    a '## Completed' heading becomes the capture zone and the heading and below
+    become the tail, so the first render migrates the file in place."""
+    begin = end = None
+    for i, raw in enumerate(lines):
+        line = bare(raw)
+        if begin is None:
+            if BEGIN_RE.match(line):
+                begin = i
+        elif END_RE.match(line):
+            end = i
+            break
+    if begin is not None and end is not None:
+        return lines[:begin], lines[begin + 1:end], lines[end + 1:]
+
+    for i, raw in enumerate(lines):
+        if COMPLETED_RE.match(bare(raw)):
+            return lines[:i], [], lines[i:]
+    return lines, [], []
+
+
+def collect(cache, overview):
+    """Every open todo, as (display, path, row, text, urgent, from_capture)."""
+    ov = key(overview)
+    items = []
+    for k, record in cache["files"].items():
+        path = record.get("path", k)
+        name = display_name(path)
+        for entry in record.get("unchecked", []):
+            items.append((name, path, entry["row"], entry["text"],
+                          entry.get("urgent", False), k == ov))
+    items.sort(key=lambda t: (t[0].lower(), t[2]))
+    return items
+
+
+def render_line(text, urgent, source=None):
+    line = "- [ ] {}{}".format("! " if urgent else "", text)
+    if source:
+        line += " [[{}]]".format(source)
+    return line
+
+
+def build_generated(items, nl):
+    """Urgent cross-cuts everything including the capture zone. Inbox and By
+    File skip capture-zone todos -- they are already visible a few lines up."""
+    out = []
+
+    def put(s=""):
+        out.append(s + nl)
+
+    urgent = [i for i in items if i[4]]
+    external = [i for i in items if not i[5]]
+
+    # Stamped on every render but ignored when deciding whether anything
+    # changed, so it reads as "when the todos last moved", not "last swept".
+    put("_Updated {}_".format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M")))
+    put()
+
+    if urgent:
+        put("## Urgent")
+        put()
+        for name, _p, _r, text, _u, from_capture in urgent:
+            put(render_line(text, True, None if from_capture else name))
+        put()
+
+    put("## Inbox")
+    put()
+    normal = [i for i in external if not i[4]]
+    if not normal:
+        put("_No open todos._")
+    else:
+        for name, _p, _r, text, _u, _c in normal:
+            put(render_line(text, False, name))
+    put()
+
+    put("# By File")
+    put()
+    groups = {}
+    for name, _p, _r, text, urg, _c in external:
+        groups.setdefault(name, []).append((text, urg))
+    for name in sorted(groups, key=lambda s: s.lower()):
+        put("## {}".format(name))
+        for text, urg in groups[name]:
+            put(render_line(text, urg))
+        put()
+
+    return out
+
+
+def ensure_tail(tail, nl):
+    for raw in tail:
+        if COMPLETED_RE.match(bare(raw)):
+            return tail
+    return [nl, "## Completed (History)" + nl, nl] + list(tail)
+
+
+def append_completed(tail, entries, nl):
+    """Newest first, directly under the Completed heading."""
+    if not entries:
+        return tail
+    tail = list(ensure_tail(tail, nl))
+    at = len(tail)
+    for i, raw in enumerate(tail):
+        if COMPLETED_RE.match(bare(raw)):
+            at = i + 1
+            if at < len(tail) and bare(tail[at]).strip() == "":
+                at += 1
             else:
-                line = "- [x] {} <!-- resolved: {} -->\n".format(txt, date_res)
-            insertion_lines.append(line)
-        
-        history_lines[insert_index:insert_index] = insertion_lines
+                tail.insert(i + 1, nl)
+                at = i + 2
+            break
 
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.writelines(["# Temp\n"] + history_lines)
-            
-        generate_markdown_report(window)
-        
-        view = window.find_open_file(md_path)
-        if view:
-            view.run_command("revert")
-            
-        window.status_message("TodoSync: {} resolved, {} inbox items captured.".format(
-            len(newly_resolved_entries), 
-            len(inbox_only_todos)
-        ))
+    new = []
+    for e in entries:
+        line = "- [x] {}{}".format("! " if e.get("urgent") else "", e["text"])
+        if e.get("source"):
+            line += " [[{}]]".format(e["source"])
+        line += " <!-- resolved: {} -->".format(today())
+        new.append(line + nl)
+    tail[at:at] = new
+    return tail
 
 
-# ------------------------------
-# Event Listener
-# ------------------------------
+def render(window, overview, cache, completed=()):
+    try:
+        lines = read_lines(overview) if os.path.exists(overview) else []
+    except Exception as e:
+        log("ERROR reading overview: {}".format(e))
+        return False
+
+    nl = eol(lines)
+    capture, _old_generated, tail = split_zones(lines)
+    capture = list(capture)
+    tail = list(append_completed(tail, completed, nl))
+
+    # The blank lines around the markers are emitted here, so they have to be
+    # stripped off the zones that are carried through -- otherwise every render
+    # hands the next one an extra one and the file grows a line per sweep.
+    while capture and not bare(capture[-1]).strip():
+        capture.pop()
+    while tail and not bare(tail[0]).strip():
+        tail.pop(0)
+    if not capture:
+        capture = ["# Capture" + nl]
+
+    out = capture + [nl, BEGIN_MARK + nl, nl]
+    out.extend(build_generated(collect(cache, overview), nl))
+    out.append(END_MARK + nl)
+    out.append(nl)
+    out.extend(tail)
+
+    # Renders are idempotent, so identical output means nothing moved. Skipping
+    # the write keeps OneDrive quiet, keeps the file out of its own version
+    # history, and stops an open overview being reverted under the cursor.
+    new = "".join(out)
+    if STAMP_RE.sub("", new) == STAMP_RE.sub("", "".join(lines)):
+        return False
+
+    try:
+        write_lines(overview, out)
+    except Exception as e:
+        log("ERROR writing overview: {}".format(e))
+        return False
+    log("overview rewritten")
+    return True
+
+
+def refresh_view(window, overview):
+    view = window.find_open_file(overview)
+    if view and not view.is_dirty():
+        sublime.set_timeout(lambda: view.run_command("revert"), 0)
+
+
+# ------------------------------------------------------------------
+# Write-back: overview -> source notes
+# ------------------------------------------------------------------
+
+def locate(cache, source, text):
+    """(path, row) for an open todo, or None. Requires the text to match, so a
+    shared basename is only ambiguous when the todo text repeats too."""
+    hits = []
+    for record in cache["files"].values():
+        path = record.get("path")
+        if not path:
+            continue
+        if source and display_name(path) != source:
+            continue
+        for entry in record.get("unchecked", []):
+            if entry["text"] == text:
+                hits.append((path, entry["row"]))
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        log("AMBIGUOUS: {!r} matches {} notes; not touching any".format(text, len(hits)))
+    return None
+
+
+def edit_source(path, row, text, check=None, urgent=None):
+    """Tick a box and/or set urgency on one line. The cached row is a hint --
+    the text is verified there and searched for if the note has since moved."""
+    try:
+        lines = read_lines(path)
+    except Exception as e:
+        log("ERROR opening {}: {}".format(path, e))
+        return False
+
+    def matches(i):
+        if i < 0 or i >= len(lines):
+            return False
+        m = TODO_RE.match(bare(lines[i]))
+        if not m:
+            return False
+        body = m.group(4)
+        um = URGENT_RE.match(body)
+        return (um.group(1).strip() if um else body) == text
+
+    if not matches(row):
+        row = next((i for i in range(len(lines)) if matches(i)), None)
+        if row is None:
+            log("NOT FOUND: {!r} in {}".format(text, path))
+            return False
+
+    m = TODO_RE.match(bare(lines[row]))
+    box = m.group(3) if check is None else ("x" if check else " ")
+    if urgent is None:
+        urgent = bool(URGENT_RE.match(m.group(4)))
+
+    terminator = lines[row][len(bare(lines[row])):] or "\n"
+    lines[row] = "{}{} [{}] {}{}{}".format(
+        m.group(1), m.group(2), box, "! " if urgent else "", text, terminator)
+
+    try:
+        write_lines(path, lines)
+    except Exception as e:
+        log("ERROR writing {}: {}".format(path, e))
+        return False
+    return True
+
+
+def read_generated(overview):
+    """Every checkbox line in the generated zone, as
+    (checked, text, urgent, source). Under '# By File' the enclosing heading
+    supplies the source, since those lines carry no wiki link."""
+    lines = read_lines(overview)
+    _capture, generated, _tail = split_zones(lines)
+
+    found = []
+    in_by_file = False
+    group = None
+
+    for raw in generated:
+        line = bare(raw)
+        h = HEADING_RE.match(line)
+        if h:
+            title = h.group(2)
+            if len(h.group(1)) == 1:
+                in_by_file = title.lower().startswith("by file")
+                group = None
+            elif in_by_file:
+                group = title
+            continue
+
+        m = LINE_RE.match(line)
+        if not m:
+            continue
+        text = m.group(2).strip()
+        urgent = False
+        um = URGENT_RE.match(text)
+        if um:
+            urgent, text = True, um.group(1).strip()
+        if not text:
+            continue
+        found.append((m.group(1) != " ", text, urgent, m.group(3) or group))
+    return found
+
+
+def apply_overview_edits(window):
+    overview = overview_path(window)
+    if not overview or not os.path.exists(overview):
+        return
+
+    cache = load_cache(overview)
+    try:
+        edits = read_generated(overview)
+    except Exception as e:
+        log("ERROR reading generated zone: {}".format(e))
+        return
+
+    resolved, retitled, missed = [], 0, 0
+    seen = set()
+
+    for checked, text, urgent, source in edits:
+        if (text, source) in seen:
+            continue
+        seen.add((text, source))
+
+        found = locate(cache, source, text)
+        if not found:
+            if checked:
+                missed += 1
+            continue
+        path, row = found
+
+        if checked:
+            if edit_source(path, row, text, check=True):
+                resolved.append({"text": text, "urgent": urgent,
+                                 "source": display_name(path)})
+            else:
+                missed += 1
+            continue
+
+        was = next((e.get("urgent", False)
+                    for e in cache["files"][key(path)]["unchecked"]
+                    if e["text"] == text), False)
+        if was != urgent and edit_source(path, row, text, urgent=urgent):
+            retitled += 1
+
+    cache, completed, aborted = sweep(window, overview)
+    if aborted:
+        return
+    if render(window, overview, cache, resolved + completed):
+        refresh_view(window, overview)
+
+    parts = []
+    if resolved:
+        parts.append("{} resolved".format(len(resolved)))
+    if retitled:
+        parts.append("{} re-flagged".format(retitled))
+    if missed:
+        parts.append("{} not found -- see the log".format(missed))
+    window.status_message("TodoSync: " + (", ".join(parts) if parts else "no changes"))
+
+
+def sync(window, force=False, extra=None):
+    overview = overview_path(window)
+    if not overview:
+        return
+    cache, completed, aborted = sweep(window, overview, force=force, extra=extra)
+    if aborted:
+        window.status_message("TodoSync: symbol index looks cold; overview left alone")
+        return
+    if render(window, overview, cache, completed):
+        refresh_view(window, overview)
+
+
+# ------------------------------------------------------------------
+# Events
+# ------------------------------------------------------------------
+
+def watched(view, path):
+    """Can saving this file change the overview?
+
+    Answered from the buffer already in hand: no index lookup, no file read,
+    no cache load. A note carrying a configured class counts even if Sublime
+    has not indexed it yet, so a note classified for the first time appears on
+    that very save. Everything else -- an email note, a meeting note, an
+    unclassified note, a template -- costs one regex over its frontmatter and
+    nothing else."""
+    if excluded(path):
+        return False
+    head = view.substr(sublime.Region(0, min(view.size(), 4000)))
+    cls = frontmatter_class(head)
+    if cls and cls in settings().get("classes", []):
+        return True
+    # Still watch a note the last sweep covered, so removing its class (or
+    # emptying it) is noticed rather than leaving a ghost in the overview.
+    return key(path) in _scope
+
+
+def qualifies_by_class(view):
+    head = view.substr(sublime.Region(0, min(view.size(), 4000)))
+    return frontmatter_class(head) in settings().get("classes", [])
+
 
 class TodoSyncListener(sublime_plugin.EventListener):
-    _processing_todo = False
-    _last_load_id = None
-    _load_in_progress = {}  # Track views being loaded
-    
-    def on_post_save(self, view):
-        file_path = view.file_name()
-        w = view.window()
-        if not w:
+
+    def on_post_save_async(self, view):
+        path = view.file_name()
+        window = view.window() or sublime.active_window()
+        if not path or not window or not path.lower().endswith(".md"):
             return
-            
-        if file_path and file_path.endswith(TODO_MD):
-            if os.path.basename(os.path.dirname(file_path)) == TODO_PARENT_DIR:
-                if self._processing_todo:
-                    return
-                
-                self._processing_todo = True
-                try:
-                    process_resolutions(w)
-                    generate_markdown_report(w)
-                    view.run_command("revert")
-                finally:
-                    self._processing_todo = False
-                return
-
-        sync_view_to_yaml(w, view)
-        resolved_count = resolve_checked_in_source(w, view)
-        if resolved_count > 0:
-            self._refresh_report(w)
-
-    def on_pre_close(self, view):
-        file_path = view.file_name()
-        if file_path and not file_path.endswith(TODO_MD):
-            w = view.window()
-            if w:
-                sync_view_to_yaml(w, view)
-                resolved_count = resolve_checked_in_source(w, view)
-                if resolved_count > 0:
-                    self._refresh_report(w)
-
-    def _refresh_report(self, window):
-        """Regenerate the report and revert todoUNDP.md if it's open."""
-        _, md_path = get_paths(window)
-        if not md_path:
+        overview = overview_path(window)
+        if not overview:
             return
-        generate_markdown_report(window)
-        todo_view = window.find_open_file(md_path)
-        if todo_view:
-            todo_view.run_command("revert")
-            
-    def on_load(self, view):
-        file_path = view.file_name()
-        view_id = view.id()
-        
-        # Prevent duplicate processing
-        if view_id == self._last_load_id:
-            log_message("on_load: Skipping duplicate view_id {}".format(view_id))
-            return
-            
-        if file_path and file_path.endswith(TODO_MD):
-            if os.path.basename(os.path.dirname(file_path)) == TODO_PARENT_DIR:
-                log_message("on_load: Processing TODO_MD file, view_id {}".format(view_id))
-                self._last_load_id = view_id
-                self._load_in_progress[view_id] = True
-                
-                def regenerate():
-                    try:
-                        log_message("on_load regenerate: Starting for view_id {}".format(view_id))
-                        
-                        # Check if view is still valid
-                        if not view.is_valid():
-                            log_message("on_load regenerate: View {} is invalid, aborting".format(view_id))
-                            return
-                        
-                        # Check if view is loading
-                        if view.is_loading():
-                            log_message("on_load regenerate: View {} still loading, retrying in 200ms".format(view_id))
-                            sublime.set_timeout_async(regenerate, 200)
-                            return
-                        
-                        # Check if view is dirty (being edited)
-                        if view.is_dirty():
-                            log_message("on_load regenerate: View {} is dirty, skipping regeneration".format(view_id))
-                            return
-                        
-                        log_message("on_load regenerate: Generating report for view_id {}".format(view_id))
-                        success = generate_markdown_report(view.window())
-                        
-                        if success:
-                            # Wait a bit before reverting to ensure file system is ready
-                            def do_revert():
-                                try:
-                                    if view.is_valid() and not view.is_dirty():
-                                        log_message("on_load regenerate: Reverting view_id {}".format(view_id))
-                                        view.run_command("revert")
-                                        log_message("on_load regenerate: Revert complete for view_id {}".format(view_id))
-                                    else:
-                                        log_message("on_load regenerate: Skipping revert, view invalid or dirty")
-                                except Exception as e:
-                                    log_message("ERROR in do_revert: {}".format(e))
-                                finally:
-                                    if view_id in self._load_in_progress:
-                                        del self._load_in_progress[view_id]
-                            
-                            sublime.set_timeout(do_revert, 100)
-                        else:
-                            log_message("on_load regenerate: Report generation failed")
-                            if view_id in self._load_in_progress:
-                                del self._load_in_progress[view_id]
-                            
-                    except Exception as e:
-                        log_message("ERROR in on_load regenerate: {}".format(e))
-                        if view_id in self._load_in_progress:
-                            del self._load_in_progress[view_id]
-                
-                sublime.set_timeout_async(regenerate, 100)
+        if key(path) == key(overview):
+            apply_overview_edits(window)
+        elif watched(view, path):
+            # Hand the path over when the class says it qualifies: the index
+            # will not list a note classified moments ago.
+            sync(window, extra=path if qualifies_by_class(view) else None)
 
-# ------------------------------
+    def on_load_async(self, view):
+        path = view.file_name()
+        window = view.window() or sublime.active_window()
+        if not path or not window:
+            return
+        overview = overview_path(window)
+        if overview and key(path) == key(overview):
+            sync(window)
+
+
+def plugin_loaded():
+    conf = settings()
+    conf.clear_on_change("TodoSync")
+    conf.add_on_change("TodoSync",
+                       lambda: sublime.set_timeout_async(
+                           lambda: sync(sublime.active_window()), 0))
+    # The index may still be warming up at startup; the cached classes are
+    # what keep a cold one from blanking the overview.
+    sublime.set_timeout_async(lambda: sync(sublime.active_window()), 3000)
+
+
+def plugin_unloaded():
+    settings().clear_on_change("TodoSync")
+
+
+# ------------------------------------------------------------------
 # Commands
-# ------------------------------
+# ------------------------------------------------------------------
 
-class MarkdownCollectTodosCommand(sublime_plugin.WindowCommand):
+class TodoSyncSweepCommand(sublime_plugin.WindowCommand):
     def run(self):
-        generate_markdown_report(self.window)
+        sublime.set_timeout_async(lambda: sync(self.window), 0)
 
-class MarkdownResolveTodosCommand(sublime_plugin.WindowCommand):
+
+class TodoSyncApplyCommand(sublime_plugin.WindowCommand):
     def run(self):
-        process_resolutions(self.window)
+        sublime.set_timeout_async(lambda: apply_overview_edits(self.window), 0)
+
+
+class TodoSyncRebuildCommand(sublime_plugin.WindowCommand):
+    def run(self):
+        overview = overview_path(self.window)
+        if not overview:
+            self.window.status_message("TodoSync: no overview found")
+            return
+        try:
+            os.remove(cache_path(overview))
+        except OSError:
+            pass
+        sublime.set_timeout_async(lambda: sync(self.window, force=True), 0)
+
+
+class TodoSyncShowScopeCommand(sublime_plugin.WindowCommand):
+    """What is currently being swept, and why. The diagnostic to reach for
+    while classifying notes."""
+
+    def run(self):
+        overview = overview_path(self.window)
+        if not overview:
+            self.window.status_message("TodoSync: no overview found")
+            return
+        cache = load_cache(overview)
+        self.paths = sorted(in_scope(self.window, overview).values(),
+                            key=lambda p: display_name(p).lower())
+        if not self.paths:
+            self.window.status_message(
+                "TodoSync: nothing in scope -- check 'classes' and let the index settle")
+            return
+
+        items = []
+        for path in self.paths:
+            record = cache["files"].get(key(path), {})
+            items.append([
+                display_name(path),
+                "{} open  |  class: {}".format(
+                    len(record.get("unchecked", [])), record.get("class") or "--"),
+            ])
+        self.window.show_quick_panel(items, self.open_at)
+
+    def open_at(self, index):
+        if index >= 0:
+            self.window.open_file(self.paths[index])

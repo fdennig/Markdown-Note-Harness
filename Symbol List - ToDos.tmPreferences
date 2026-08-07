@@ -7,16 +7,19 @@
     <string>entity.name.tag.todo.open.markdown, entity.name.tag.todo.urgent.markdown</string>
     <key>settings</key>
     <dict>
+        <!-- Per-file only (ctrl+R). Todos are deliberately NOT in the project
+             index: TodoSync reads them from the notes themselves, so indexing
+             them bought nothing and cost plenty. The index stores TRANSFORMED
+             names, so a change to the transformation below used to change a
+             todo's identity, which is how commit 9e172db silently duplicated
+             every todo containing a link. Nothing downstream depends on these
+             names now, and the ~285 entries are out of a shared namespace they
+             had no business being in. -->
         <key>showInSymbolList</key>
         <integer>1</integer>
         <key>showInIndexedSymbolList</key>
-        <integer>1</integer>
+        <integer>0</integer>
         <key>symbolTransformation</key>
-        <string>
-            s/\!?\[([^]]+)\]\([^)]*\)/$1/g;     # strip image or link urls
-            s/\[([^]]+)\]\[[^]]*\]/$1/g;        # strip reference urls
-        </string>
-        <key>symbolIndexTransformation</key>
         <string>
             s/\!?\[([^]]+)\]\([^)]*\)/$1/g;     # strip image or link urls
             s/\[([^]]+)\]\[[^]]*\]/$1/g;        # strip reference urls

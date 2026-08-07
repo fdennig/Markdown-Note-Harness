@@ -42,9 +42,11 @@ contexts:
     # which is exactly what you want (they won't get your symbol scope).
 
   todo-item-unchecked:
-    - match: '(!)[ \t]'
-      captures:
-        1: keyword.other.todo.urgent.markdown
+    # Lookahead, not a match: the "!" has to be *inside* todo-item-urgent's
+    # meta_scope, not consumed on the way in. Consuming it here left the "!"
+    # outside the scope -- so it fell outside the ctrl+R symbol too, and an
+    # urgent todo was indistinguishable from its non-urgent twin.
+    - match: '(?=![ \t])'
       set: todo-item-urgent
     - match: ''
       set: todo-item-normal

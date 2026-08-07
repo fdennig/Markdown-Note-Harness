@@ -14,12 +14,27 @@
       "args"   : {}
     },
     {
-      "caption": "Markdown: Collect TODOs", 
-      "command": "markdown_collect_todos"
+      // Re-derive the overview from the notes. Runs automatically on save of
+      // any markdown file; this is the manual nudge.
+      "caption": "Todos: Sweep now",
+      "command": "todo_sync_sweep"
     },
     {
-      "caption": "Markdown: Resolve Checked TODOs",
-      "command": "markdown_resolve_todos"
+      // Push ticks and ! toggles from the overview back into the notes.
+      // Runs automatically on save of todoUNDP.md.
+      "caption": "Todos: Apply overview edits",
+      "command": "todo_sync_apply"
+    },
+    {
+      // Which notes are being swept, and why. The one to reach for while
+      // classifying: a note missing from the overview is a note missing here.
+      "caption": "Todos: Show scope",
+      "command": "todo_sync_show_scope"
+    },
+    {
+      // Throw away the derived cache and re-read every note in scope.
+      "caption": "Todos: Rebuild cache",
+      "command": "todo_sync_rebuild"
     },
     {
       "caption": "Convert Office File to Markdown",
