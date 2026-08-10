@@ -140,11 +140,32 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
         If Len(senderEmail) > 0 Then
             resultString = resultString & "from_email: """ & senderEmail & """" & vbCrLf
         End If
-        ' Convert recipients to YAML list
-        resultString = resultString & "to:" & vbCrLf
+        ' Recipients: two keys, built in one pass over the collection.
+        '   to:        EVERY recipient -- To, Cc and Bcc alike.
+        '   to_email:  their SMTP addresses, one per line, in the SAME ORDER.
+        '
+        ' There is deliberately no cc: split. Cc is not used consistently enough
+        ' to carry meaning -- the difference between addressing someone and
+        ' copying them says more about the sender's habits than about who the
+        ' message concerned -- so encoding it would add a key that invites false
+        ' inferences. The Recipients collection is not even ordered To-then-Cc
+        ' (measured: a live item with both Cc entries ahead of the To), so the
+        ' order here is Outlook's, not a ranking.
+        '
+        ' Order and count are the whole contract on to_email:. The resolver
+        ' pairs it with to: BY POSITION and only when the two lists are the same
+        ' length, and its YAML reader discards empty items -- so one skipped or
+        ' blank line does not cost one address, it throws away every address on
+        ' the note and drops it back to matching on display names. That is why
+        ' GetRecipSmtp always returns something.
+        Dim toNames As String: toNames = ""
+        Dim toAddrs As String: toAddrs = ""
         For Each recip In recips
-            resultString = resultString & "  - """ & formatName(recip.Name, personNameStartChar) & """" & vbCrLf
+            toNames = toNames & "  - " & YamlQuoted(formatName(recip.Name, personNameStartChar)) & vbCrLf
+            toAddrs = toAddrs & "  - " & YamlQuoted(GetRecipSmtp(recip)) & vbCrLf
         Next
+        resultString = resultString & YamlSeq("to", toNames)
+        resultString = resultString & YamlSeq("to_email", toAddrs)
         resultString = resultString & "tags:" & vbCrLf
         ' Attachments list inside front matter
         Dim att As Attachment, attName As String
@@ -242,7 +263,26 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
 
 
     Next
+
+    ' Normal completion. Jumping over the handler is what lets it report an
+    ' error without false alarms: reaching the label below can then only mean
+    ' something failed. Testing Err.Number there would not work -- the
+    ' 'On Error Resume Next' regions above leave Err set on a successful run,
+    ' and neither Resume Next nor a later 'On Error GoTo' clears it.
+    Set obj = Nothing
+    Set oMail = Nothing
+    Set outputItem = Nothing
+    Exit Sub
+
 EndClean:
+    ' This used to be silent, which made every failure indistinguishable from
+    ' the macro not being wired up at all -- no note, no message, nothing to
+    ' search for. SendAndSaveEmail has always reported; this now matches it.
+    MsgBox "ExtractEmail failed: " & Err.Description & _
+           " (error " & Err.Number & ")" & vbCrLf & vbCrLf & _
+           "No note was written. The file is saved only after the whole " & _
+           "frontmatter is built, so there is no half-written note to clean up.", _
+           vbExclamation, "ExtractEmail"
     Set obj = Nothing
     Set oMail = Nothing
     Set outputItem = Nothing
@@ -375,7 +415,17 @@ Private Sub ExtractMeetingCore()
         ShellExecute 0, "open", "subl", """" & vaultPathToSaveFileTo & fileName & """", vbNullString, 1
 
     Next
+
+    ' Same shape as ExtractEmailCore: fall out before the handler so that
+    ' reaching it means failure and nothing else.
+    Set obj = Nothing
+    Set oAppt = Nothing
+    Exit Sub
+
 EndCleanMeeting:
+    MsgBox "ExtractMeeting failed: " & Err.Description & _
+           " (error " & Err.Number & ")" & vbCrLf & vbCrLf & _
+           "No note was written.", vbExclamation, "ExtractMeeting"
     Set obj = Nothing
     Set oAppt = Nothing
 End Sub
@@ -412,14 +462,87 @@ Private Function GetSenderSmtp(oMail As Outlook.MailItem) As String
         If Len(addr) = 0 Then
             Dim pa As Outlook.PropertyAccessor
             Set pa = oMail.PropertyAccessor
-            ' PR_SMTP_ADDRESS
-            addr = pa.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x39FE001E")
+            ' PR_SENDER_SMTP_ADDRESS -- the SENDER's address. This used to read
+            ' PR_SMTP_ADDRESS (0x39FE001E), which belongs to the recipient
+            ' table: on a mail item it comes back useless, so this fallback
+            ' silently produced nothing every time GetExchangeUser failed.
+            addr = pa.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x5D01001F")
         End If
     End If
     GetSenderSmtp = LCase$(addr)
     Exit Function
 Fail:
     GetSenderSmtp = ""
+End Function
+
+Private Function GetRecipSmtp(recip As Outlook.Recipient) As String
+    ' The SMTP address of one recipient, and NEVER an empty string -- see the
+    ' recipient block in ExtractEmailCore for why a blank is worse than a wrong
+    ' one.
+    '
+    ' Unlike the sender case above, PR_SMTP_ADDRESS is the correct property
+    ' here: it is the recipient table's own, which is exactly what an
+    ' AddressEntry reached through a Recipient is.
+    Dim addr As String
+    Dim ae As Outlook.AddressEntry
+
+    On Error Resume Next
+    Set ae = recip.AddressEntry
+    If Not ae Is Nothing Then
+        If ae.Type = "EX" Then
+            ' Never chain off GetExchangeUser. "EX" says only that the entry
+            ' came from Exchange, not that it is a person: a distribution list,
+            ' a room or equipment mailbox, a public folder, and any entry the
+            ' address book could not resolve all return Nothing -- and
+            ' .PrimarySmtpAddress on Nothing is run-time error 91. The
+            ' 'On Error Resume Next' above does not save it either, because
+            ' 'Break on All Errors' in the VBE breaks inside a Resume Next
+            ' region, so a single group in the To line stops the macro dead.
+            Dim exchUser As Outlook.ExchangeUser
+            Dim exchList As Outlook.ExchangeDistributionList
+            Set exchUser = ae.GetExchangeUser
+            If Not exchUser Is Nothing Then
+                addr = exchUser.PrimarySmtpAddress
+            Else
+                ' A group has an SMTP address of its own, and it is the honest
+                ' answer for that position in the list -- better than the X500
+                ' DN the fallbacks below would otherwise leave there.
+                Set exchList = ae.GetExchangeDistributionList
+                If Not exchList Is Nothing Then
+                    addr = exchList.PrimarySmtpAddress
+                End If
+            End If
+            If Len(addr) = 0 Then
+                addr = ae.PropertyAccessor.GetProperty( _
+                    "http://schemas.microsoft.com/mapi/proptag/0x39FE001E")
+            End If
+        Else
+            addr = ae.Address
+        End If
+    End If
+    ' Whatever the item itself carries, if the address book could not resolve
+    ' the entry. For an Exchange recipient this can be an X500 DN, which
+    ' matches no person note -- harmless, because an address that matches
+    ' nothing does not stop the resolver falling back to the display name.
+    If Len(addr) = 0 Then addr = recip.Address
+    ' Last resort: hold the position in the list. Non-empty so the YAML reader
+    ' keeps it and the two lengths still agree; not address-shaped, so it cannot
+    ' collide with a real person note.
+    If Len(addr) = 0 Then addr = "unknown"
+    On Error GoTo 0
+
+    GetRecipSmtp = LCase$(Trim$(addr))
+End Function
+
+Private Function YamlSeq(key As String, items As String) As String
+    ' 'key:' followed by the items, or 'key: []' when there are none -- the
+    ' convention attachments: and optional_attendees: already use, and the one
+    ' the resolver reads as an empty list rather than as a missing key.
+    If Len(items) > 0 Then
+        YamlSeq = key & ":" & vbCrLf & items
+    Else
+        YamlSeq = key & ": []" & vbCrLf
+    End If
 End Function
 
 '---------------------------------------------------------------------------'
@@ -557,11 +680,18 @@ Sub SendAndSaveEmail()
         resultString = resultString & "from_email: """ & myEmail & """" & vbCrLf
     End If
 
-    ' Recipients as a YAML list
-    resultString = resultString & "to:" & vbCrLf
+    ' Recipients -- the same two keys and the same positional contract as
+    ' ExtractEmailCore; see the comment there. Bcc recipients are real on an
+    ' outgoing note (they are not on received mail) and land in to: with
+    ' everyone else, which is also the only place they are recorded.
+    Dim toNames As String: toNames = ""
+    Dim toAddrs As String: toAddrs = ""
     For Each recip In recips
-        resultString = resultString & "  - """ & formatName(recip.Name, personNameStartChar) & """" & vbCrLf
+        toNames = toNames & "  - " & YamlQuoted(formatName(recip.Name, personNameStartChar)) & vbCrLf
+        toAddrs = toAddrs & "  - " & YamlQuoted(GetRecipSmtp(recip)) & vbCrLf
     Next
+    resultString = resultString & YamlSeq("to", toNames)
+    resultString = resultString & YamlSeq("to_email", toAddrs)
 
     resultString = resultString & "tags:" & vbCrLf
 
@@ -631,7 +761,16 @@ Private Function GetCurrentUserSmtp() As String
     Dim ae As Outlook.AddressEntry
     Set ae = Application.Session.CurrentUser.AddressEntry
     If ae.Type = "EX" Then
-        GetCurrentUserSmtp = LCase$(ae.GetExchangeUser.PrimarySmtpAddress)
+        ' Same trap as GetRecipSmtp: GetExchangeUser can return Nothing, and
+        ' .PrimarySmtpAddress on Nothing is error 91 -- here it would be caught
+        ' by the handler below and silently cost the sent note its from_email.
+        Dim exchUser As Outlook.ExchangeUser
+        Set exchUser = ae.GetExchangeUser
+        If Not exchUser Is Nothing Then
+            GetCurrentUserSmtp = LCase$(exchUser.PrimarySmtpAddress)
+        Else
+            GetCurrentUserSmtp = LCase$(ae.Address)
+        End If
     Else
         GetCurrentUserSmtp = LCase$(ae.Address)
     End If
