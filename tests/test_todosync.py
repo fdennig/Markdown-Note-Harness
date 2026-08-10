@@ -9,7 +9,10 @@ import tempfile
 import types
 
 TMP = tempfile.mkdtemp(prefix="todosync_")
-PKG = r"C:/portablePrograms/sublime/Data/Packages/francis_sublime_package"
+# Derived, not hardcoded: the package directory has been renamed once already,
+# and running "python tests/test_todosync.py" puts tests/ on sys.path, not the
+# package root, so a wrong constant here is a hard import failure.
+PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------------- stubs ----------------
 
@@ -18,7 +21,7 @@ SETTINGS = {
     "always_include": [],
     "exclude": ["*_template.md"],
     "overview": "",
-    "min_scope_ratio": 0.5,
+    "guard_empty_scope": True,
     "verbose": False,
 }
 

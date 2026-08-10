@@ -165,7 +165,16 @@ def outlook_lookup(view):
 # ever zipped into a .sublime-package this would have to become
 # sublime.load_resource() plus a write to temp.
 BRIDGE_SCRIPT = "outlook_bridge.ps1"
-PACKAGE_NAME = "francis_sublime_package"
+
+# Derived, never named. This was PACKAGE_NAME = "francis_sublime_package", and it
+# stopped resolving the moment the package directory was renamed to
+# Markdown-Note-Harness: bridge_path() then built a path to a file that does not
+# exist, so every Outlook mail action failed while the bridge itself was
+# perfectly healthy. Nothing pointed at the cause, because the name only appears
+# here and the failure surfaces as a missing script. The same rename broke
+# tests/test_todosync.py the same way, and the same fix applies -- __file__
+# cannot go stale.
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # powershell.exe, not pwsh: PowerShell 7's COM interop with Outlook is
 # unreliable, and 5.1 ships with Windows.
@@ -197,7 +206,7 @@ BRIDGE_REASONS = {
 
 def bridge_path():
     """Absolute path to the PowerShell bridge."""
-    return os.path.join(sublime.packages_path(), PACKAGE_NAME, BRIDGE_SCRIPT)
+    return os.path.join(PACKAGE_DIR, BRIDGE_SCRIPT)
 
 def parse_last_json_line(data):
     """The bridge's response is the last JSON object it printed on stdout."""
