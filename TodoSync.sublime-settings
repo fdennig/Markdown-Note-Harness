@@ -20,7 +20,7 @@
     // automatically by Symbol List - Email Flags.tmPreferences. Sublime has to
     // index the note first, so a freshly classified note appears a moment
     // after it is saved rather than instantly.
-    "classes": ["topic", "activity", "programme", "person"],
+    "classes": ["topic", "activity", "programme", "person", "organisation"],
 
     // Swept regardless of class. Paths are relative to the folder holding the
     // overview, or absolute. No globs -- these are resolved without walking
