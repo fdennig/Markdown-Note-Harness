@@ -1,0 +1,73 @@
+{
+    // The Sublime half of WikiResolve stamps from_wiki:/to_wiki: onto the note
+    // you are SAVING, and nothing else. The corpus pass -- the report, the
+    // backfill, the cleanup -- is a script in the vault:
+    //
+    //     <vault>\scripts\resolve_wiki.py
+    //
+    // Ask the agent to run it, or run it yourself:
+    //
+    //     "%USERPROFILE%\.local\bin\python3.14.exe" scripts\resolve_wiki.py
+    //
+    // Edit your copy in Packages/User/WikiResolve.sublime-settings rather than
+    // this file, so a package update does not overwrite it.
+
+    // Where the shared logic lives. Leave empty to look for
+    // "scripts/wikiresolve_core.py" under each folder open in the window.
+    // Set it when the vault is not one of the window's folders, or to pin the
+    // plugin and the script to the same copy.
+    //
+    // If it cannot be found, every hook becomes a no-op and says so once in
+    // Data/Logs/WikiResolve.log. Nothing is written and nothing breaks.
+    "core_path": "",
+
+    // Which classes own names and addresses. Their frontmatter 'email:' and
+    // 'aliases:' lists are the entire source of truth for resolution.
+    "person_classes": ["person"],
+
+    // Where to look for those notes. Empty means the folders open in the
+    // window -- which is what lets a person note outside the vault be found,
+    // and the vault owner's note is exactly that case.
+    //
+    // The plugin and scripts/resolve_wiki.py resolve identically only when they
+    // walk the same roots. Set this explicitly if you work in several projects
+    // and want the answer to stop depending on which one is open.
+    "person_roots": [],
+
+    // Skipped when reading person notes. fnmatch globs, tested against the file
+    // name and the full path. person_template.md must stay excluded: its
+    // 'email:' and 'aliases:' are empty placeholders.
+    "exclude": ["*_template.md"],
+
+    // Stamp a note when it is OPENED, not only when it is saved.
+    //
+    // This is what keeps up with notes nobody edits: the Outlook macro writes
+    // them while Sublime is not running, so on-save alone would rarely see a
+    // new email.
+    //
+    // The write goes to disk and stops there. It does NOT revert the view --
+    // doing that from inside the view's own load callback crashed Sublime on
+    // every email note opened. Sublime's own file watcher reloads an unmodified
+    // buffer, which is the same result without re-entering the load cycle.
+    // The pass is also monotone, so the most a surprise write can do is add a
+    // link, never remove one, and it reports what it did in the status bar.
+    //
+    // Set to false if you would rather nothing touched a note you only opened;
+    // scripts/resolve_wiki.py then picks it up on the next run.
+    "on_load": true,
+
+    // Write a line per index build to Data/Logs/WikiResolve.log. The log is
+    // also where a failure to find the core, and any on-load write, is
+    // recorded.
+    "verbose": true
+
+    // Gone, and why:
+    //
+    //   self_people   -> mark the note instead:  self: true  in francis.md.
+    //                    The fact then travels with the vault, so the script,
+    //                    a second machine and any other consumer reach the
+    //                    same answer instead of re-adding a self link.
+    //   startup_sweep -> removed with the sweep. Use the script.
+    //   leaf_classes  -> comes from LEAF_SPEC in wikiresolve_core.py, which
+    //                    also names which keys each class carries.
+}

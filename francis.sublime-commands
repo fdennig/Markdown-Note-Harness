@@ -83,5 +83,21 @@
       "caption": "Email: Resolve in Outlook (diagnostic)",
       "command": "outlook_mail_action",
       "args": { "action": "resolve" }
+    },
+    // The corpus pass -- report, backfill, cleanup -- is no longer a command.
+    // It lives in the vault at scripts/resolve_wiki.py; ask the agent to run
+    // it. What remains here is diagnostics for the in-editor index.
+    {
+      // Which person notes the resolver can see, which names collide, and who
+      // is flagged 'self: true'. A person missing here is a person the on-save
+      // stamp cannot resolve.
+      "caption": "Wiki: Show person index",
+      "command": "wiki_resolve_show_index"
+    },
+    {
+      // Re-read every person note. Needed when person notes change outside
+      // Sublime, since only a save inside the editor refreshes the index.
+      "caption": "Wiki: Rebuild person index",
+      "command": "wiki_resolve_rebuild_index"
     }
 ]
