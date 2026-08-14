@@ -21,12 +21,17 @@ map.
 | `TodoSync.sublime-settings` | Which note classes get swept. Override it in `Packages/User/` |
 | `WikiResolve.py` | Stamps the derived `from_wiki:` / `to_wiki:` keys onto the note you save or open. The logic itself lives in the vault |
 | `WikiResolve.sublime-settings` | Where the vault core and the person notes are. Override it in `Packages/User/` |
+| `WikiLinks.py` | Backlinks, rename-with-backlinks, and the note picker on `tab` — all three answered from the symbol index instead of by reading the vault |
+| `WikiLinks.sublime-settings` | Which classes the note picker offers, and which of them wait for a `/filter`. Override it in `Packages/User/` |
 | `outlook_bridge.ps1` | PowerShell COM bridge to Outlook Classic. Inert to Sublime; reached only via `subprocess` from `francis.py` |
 | `MarkdownExtended.sublime-syntax` | Adds a scope for unchecked todos, for colour and the per-file symbol list |
 | `YAMLEmailFrontmatter.sublime-syntax` | Adds scopes for the email frontmatter fields the macro writes |
 | `Symbol List - *.tmPreferences` | Rewrites those scopes into the `_note` symbol tokens the commands look up |
+| `Reference List - Wiki *.tmPreferences` | Indexes wiki link targets as *references*, which is what turns backlinks into one lookup |
+| `Reference List - Wiki In Symbols.tmPreferences.disabled` | Inert. The one-minute experiment that would index wiki links inside headings and todos too |
+| `MarkdownExtended.sublime-settings` | Hands `shift+f12` to `wiki_backlinks`, using MarkdownEditing's own disable switch |
 | `outlook_macros/` | The VBA that produces the email notes, imported by `git subtree`. Runs in Outlook, not in Sublime |
-| `tests/` | Two headless suites — `test_todosync.py` and `test_wikiresolve.py`. Run by hand; nothing runs them for you |
+| `tests/` | Three headless suites — `test_todosync.py`, `test_wikiresolve.py`, `test_wikilinks.py`. Run by hand; nothing runs them for you |
 | `wiki_page_FOR_MARKDOWN_EDITING.txt` | A patched copy of MarkdownEditing's `wiki_page.py` — see below |
 
 ## How the pieces fit
@@ -211,6 +216,85 @@ paths are **monotone** — they fill an empty key and append newly resolved name
 and never clear a value or shorten a list, so a half-mounted vault cannot silently
 delete every link to someone. Only `resolve_wiki.py --reconcile` removes anything.
 
+**Wiki links: picking, backlinks and rename**
+
+A wiki link target *is* a filename — the vault's rule is a globally unique
+basename with no path — so Sublime's symbol index can answer "who links to this
+note?" if the targets are scoped and indexed as **references**. They now are:
+body links come free from the built-in Markdown syntax, and
+`YAMLEmailFrontmatter.sublime-syntax` scopes the five frontmatter keys that hold
+basenames (`from_wiki:`, `to_wiki:`, `organizer_wiki:`, `attendees_wiki:` and the
+hand-written `responsible:`). That is 11,896 references over 604 distinct names.
+
+> **Rebuild the index once after updating to 20260813.** Until then the body
+> half of that was indexed under the wrong name — `[[francis` rather than
+> `francis`, because `meta_scope` covers the opening `[[` and the selector only
+> subtracted the closing `]]` — so *Show backlinks* answered from frontmatter
+> alone and *Rename* left every body link stale. A `.tmPreferences` change does
+> not re-index anything by itself: close Sublime, delete `Data/Index/`, reopen.
+
+The **picker** is the same observation run backwards — not *who links to X?*
+but *what is there to link to?* — and it leans on a different index entry:
+frontmatter `class: X` is already scoped and indexed as the symbol `X_note`,
+so the candidate list is one `symbol_locations` call per class and opens no
+file. Emails are 1,746 of the 2,259 classified notes, so they are held back
+behind `/email` rather than burying the ~510 rows worth linking to. The cost
+of being index-only is worth naming: **a note with no `class:` key is not
+offered at all** — 124 files here, all of `#countries/`. Classifying one is
+what puts it in the list.
+
+- *Wiki: Show backlinks* — `shift+f12`. Every note linking to **this** one, in a
+  quick panel with previews. The subject is the note in view and nothing else;
+  where the caret happens to sit does not change it. One native lookup, where
+  MarkdownEditing's equivalent reads every `.md` in the project.
+- *Wiki: Show backlinks to link under caret* — the other reading: who else
+  links to the note this `[[link]]` points at. Palette only, and falls back to
+  the note in view when the caret is not in a link.
+- *Wiki: Rename note and backlinks* — rename a note and rewrite every link to it.
+- *Wiki: Insert link to note* — `tab` with the caret inside `[]`. The second
+  bracket appears and a picker opens listing every **classified** note;
+  `enter` writes `[[itsBasename]]`. Typing `/` filters the list down to the
+  class rows — `/person`, `/activity`, `/email` … — and those **union** rather
+  than narrow, because a note carries exactly one `class:`. Anything already
+  between the brackets seeds the search, so `[fran` + `tab` opens the list
+  pre-filtered. `tab` on an existing `[[link]]` re-picks its target.
+
+One blind spot, stated rather than hidden: **a wiki link written inside a
+markdown heading, or inside an open todo, is not indexed**. Indexing it destroys
+that heading's or todo's own symbol — at any point only the highest scoring
+`.tmPreferences` entry applies, and the wiki rule outscores both MarkdownEditing's
+heading rule and this package's todo rule, so a link in the middle of the line
+cut the line's symbol in two and left a project symbol called `]]` behind. The
+selector therefore subtracts `markup.heading` and `entity.name.tag.todo`.
+
+In this vault that hides 477 occurrences across 219 headings (only 233 of them
+pointing at a note that exists) and 468 across 304 open todos (464 of them
+real) — so about 700 genuine backlink rows, and eight notes that consequently
+look orphaned. Every rename repeats the caveat in its confirmation dialog and in
+`Data/Logs/WikiLinks.log`. To win them back, `Reference List - Wiki In
+Symbols.tmPreferences.disabled` is a ready-made experiment: drop the `.disabled`,
+press `ctrl+R` in `todoUNDP.md`, and see whether the todos come back whole. The
+file explains what each outcome means and what to change next.
+
+The raw `from:` / `to:` keys are deliberately **not** scoped. They hold display
+names like `[[@Demba Tandia]]` that resolve to no file, they are the Outlook
+macro's audit trail and are never edited from this side, and indexing their 9,255
+occurrences would bury every real hit. What decides whether a key is scoped is
+what its value points **at**, not who wrote it — which is why `responsible:` is in
+despite being hand-written.
+
+Three things keep the rename honest. Only rows the index reported are rewritten,
+so a raw `to:` line holding a bare `[[francis]]` (2,286 of them do) is left alone.
+The row base is *measured* against the file rather than assumed, because
+`SymbolLocation.row` is documented only as "the row" and a silent off-by-one would
+rewrite the line above every link in the vault. And a rename refuses to run while
+any affected file has unsaved changes, because the rewrite goes to disk underneath
+open buffers.
+
+The count in the confirmation dialog is doing real work: whether the index has
+seen the whole vault is the one property a lookup cannot report on itself, so
+recognising the number is what stands in for a cross-check.
+
 **Other**
 
 - *Convert Office File to Markdown* — .docx / .pptx via Pandoc, .pdf via marker-pdf.
@@ -234,18 +318,51 @@ flowchart LR
 ```
 
 Sublime runs the **last** matching binding across the merged keymap, and package
-order is ASCII — so this package always wins over MarkdownEditing and ordering
-inside `Default.sublime-keymap` can never hand a scope back. The only tool for
-that is the selector, which is why the Outlook binding reads
-`text.html.markdown - (meta.link | markup.underline.link | entity.name.attachment.yaml)`.
-Every subtracted scope is exactly the scope some other F12 binding needs. Anything
-new bound to F12 across the whole of `text.html.markdown` must subtract the same
-set.
+order is ASCII. **Which package that favours changed with the directory rename**:
+`Markdown-Note-Harness` sorts *before* `MarkdownEditing` (`-` is 0x2D, `E` is
+0x45), so MarkdownEditing now loads later and wins any overlap. Under the old name
+`francis_sublime_package` it was the other way round.
+
+Nothing broke, because ordering was never what protected these bindings — the
+selector was, and still is. The Outlook binding reads
+`text.html.markdown - (meta.link | markup.underline.link | entity.name.attachment.yaml)`,
+and every subtracted scope is exactly the scope some other F12 binding needs, so
+the two packages never compete for one caret. Anything new bound to F12 across the
+whole of `text.html.markdown` must subtract the same set.
+
+Where an overlap is *wanted* — `shift+f12`, which deliberately replaces
+MarkdownEditing's `mde_list_back_links` — the selector cannot help, and ordering
+now works against us. That handover is made deterministic instead by
+`MarkdownExtended.sublime-settings`, which sets MarkdownEditing's own
+`mde.keymap_disable.list_back_links` switch for views using this syntax. Note
+MarkdownEditing binds `shift+f12` three times in markdown, so that binding
+subtracts `meta.link` to leave the reference-jump and footnote bindings alone, and
+then adds wiki links back so `shift+f12` on a `[[link]]` reports *that* note's
+backlinks.
 
 Nothing in a scope distinguishes an email note from any other Markdown file, so
 `OutlookMailActionCommand.is_enabled` is what keeps that wide binding honest —
 without it, every F12 in `todoUNDP.md` would spawn PowerShell for a certain
 failure.
+
+`tab` is the same story with a different cast. It goes to `wiki_pick_link` on
+`meta.link.reference.description.markdown` (a `[…]`) and on
+`meta.link.reference.wiki.description.markdown` (a `[[…]]`) — two bindings
+because scope selectors match on dot-separated prefixes, and
+`meta.link.reference.description` is *not* a prefix of
+`meta.link.reference.wiki.description`. MarkdownEditing binds `tab` five times
+in markdown and loads after this package, but every one of those is gated on
+`preceding_text` matching a bullet or a heading underline, or on a non-empty
+selection — so requiring `selection_empty` is what keeps the two apart. A
+todo's `[ ]` is not a hazard either: `MarkdownExtended.sublime-syntax` captures
+the checkbox explicitly as `markup.checkbox`, so it never carries a link scope.
+
+Two things `tab` used to point at are gone. `mde_make_page_reference` walked
+every project folder and stat-ed every file to build its list, which is the
+design this package keeps replacing; it is still on MarkdownEditing's own
+palette entry. `mde_pick_wiki_link_page_name` **never existed** — there is no
+such command anywhere in `MarkdownEditing.sublime-package`, so that binding had
+been dead for as long as it had been written down.
 
 ## The Outlook round trip
 
@@ -295,17 +412,24 @@ whose message has genuinely been archived or deleted reports and stops.
 ```
 "%USERPROFILE%\.local\bin\python3.14.exe" tests/test_todosync.py
 "%USERPROFILE%\.local\bin\python3.14.exe" tests/test_wikiresolve.py
+"%USERPROFILE%\.local\bin\python3.14.exe" tests/test_wikilinks.py
 ```
 
-Both stub `sublime` and `sublime_plugin` and build a throwaway vault in a temp
-directory, so neither needs the editor. They must stay in `tests/` — Sublime only
-auto-loads plugins from the package root, and a file that assigns a fake into
-`sys.modules["sublime"]` would break every plugin in the process if it were loaded.
+All three stub `sublime` and `sublime_plugin` and build a throwaway vault in a
+temp directory, so none of them needs the editor. They must stay in `tests/` —
+Sublime only auto-loads plugins from the package root, and a file that assigns a
+fake into `sys.modules["sublime"]` would break every plugin in the process if it
+were loaded.
 
 `test_wikiresolve.py` is thin on purpose: it covers finding the vault core, the
 class gate, the `on_pre_save` buffer edit, and that the view is **never** reverted
 — the crash regression. The resolution logic is tested where it lives, with no
 stubbing at all, in `<vault>/scripts/tests/test_wikiresolve_core.py`.
+
+`test_wikilinks.py` covers the half of the backlink feature that does not need
+Sublime: turning reported `(path, row)` locations into correct bytes, with the
+BOM and CRLF intact. That the index reports the right locations in the first
+place is a manual check, because no stub reproduces Sublime's indexer.
 
 The VBA is not tested by anything. Editing a `.vba` file here changes nothing
 until it is pasted into Outlook's VBE (Alt+F11) and the module re-imported.
