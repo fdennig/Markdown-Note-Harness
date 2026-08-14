@@ -1,10 +1,19 @@
 [
     {
-      "caption": "Select wiki reference",
-      // "command": "prompt_add_string_to_selection",
-      "command": "mde_make_page_reference",
-      
-      "args"   : {}
+      // Pick a note from the symbol index and write [[its basename]] at the
+      // caret. Also on tab inside [] , and on tab inside an existing [[link]]
+      // to re-pick its target.
+      //
+      // "/person", "/activity", "/email" ... narrow by frontmatter class and
+      // union with each other; without one, every class but email is listed.
+      // A note with no "class:" key produces no symbol and so is not offered
+      // -- classifying it is what puts it in the list.
+      //
+      // Replaces MarkdownEditing's mde_make_page_reference, which answered the
+      // same question by stat-ing every file in every project folder. That one
+      // is still on MarkdownEditing's own palette entry.
+      "caption": "Wiki: Insert link to note",
+      "command": "wiki_pick_link"
     },
     {
       "caption": "Open Markdown Link",
@@ -99,5 +108,32 @@
       // Sublime, since only a save inside the editor refreshes the index.
       "caption": "Wiki: Rebuild person index",
       "command": "wiki_resolve_rebuild_index"
+    },
+    {
+      // Every note linking to this one, straight out of the symbol index: one
+      // native lookup, where MarkdownEditing's equivalent reads every .md in
+      // the vault. The subject is the note in view, always -- where the caret
+      // sits does not change the answer. Also on shift+f12.
+      "caption": "Wiki: Show backlinks",
+      "command": "wiki_backlinks"
+    },
+    {
+      // The other reading, and the one shift+f12 used to give for free: who
+      // ELSE links to the note this [[link]] points at. Deliberately palette
+      // only, because as a default it made the panel's subject depend on where
+      // the cursor was left, and the panel lists paths without naming what it
+      // is about -- so a link mentioned in passing silently answered a
+      // question nobody asked. Falls back to the note in view outside a link.
+      "caption": "Wiki: Show backlinks to link under caret",
+      "command": "wiki_backlinks",
+      "args": { "under_caret": true }
+    },
+    {
+      // Rename this note and rewrite every link to it. Locations come from the
+      // index, so nothing is searched for; the count in the confirmation is
+      // what tells you the index has seen the whole vault. Refuses to run
+      // while any affected file has unsaved changes.
+      "caption": "Wiki: Rename note and backlinks",
+      "command": "wiki_rename_note"
     }
 ]

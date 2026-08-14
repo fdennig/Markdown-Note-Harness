@@ -48,17 +48,104 @@
             { "key": "selector", "operator": "equal", "operand": "entity.name.attachment.yaml", "match_all": true }
         ] 
     },
-    {
-      "keys": ["tab"],
-      "command": "mde_pick_wiki_link_page_name",
-      "context": [
-        { "key": "selector", "operator": "equal", "operand": "meta.link.reference.wiki.description.markdown" }
-      ]
-    },
-    { "keys": ["tab"], "command": "mde_make_page_reference", "context":
+    { // Pick a note and write [[its basename]] -- caret inside [] .
+      //
+      // Tab doubles the bracket first and then opens the picker, so the
+      // keystroke visibly does something before the overlay appears. Whatever
+      // was already inside the brackets seeds the search, so "[fran" + tab
+      // opens the list already filtered.
+      //
+      // This REPLACES mde_make_page_reference, which answered the same
+      // question by stat-ing every file in every project folder and had no
+      // notion of what kind of note it was offering. Candidates here come from
+      // the symbol index, one lookup per frontmatter class, and "/person",
+      // "/activity", "/email" ... narrow the list. MarkdownEditing's version
+      // is still on its own palette entry.
+      //
+      // Three guards, each earning its place:
+      //   selection_empty       -- MarkdownEditing's fourth tab binding
+      //                            (mde_indent_list_item, :1060) fires on a
+      //                            NON-empty selection across all of markdown,
+      //                            and it loads after this package, so it wins
+      //                            every overlap. Requiring an empty selection
+      //                            is what keeps the two from competing.
+      //   overlay_visible       -- the picker re-runs this command from the
+      //                            overlay; tab in there belongs to the input.
+      //   auto_complete_visible -- tab commits a completion, and that has to
+      //                            keep working inside a link description.
+      //
+      // The todo checkbox is NOT a hazard: MarkdownExtended.sublime-syntax
+      // captures "- [ ]" explicitly as markup.checkbox.*.markdown-gfm, so it
+      // never carries meta.link.reference.description.markdown. Nor is [[x]]:
+      // scope selectors match on dot-separated prefixes, and
+      // meta.link.reference.description is not a prefix of
+      // meta.link.reference.wiki.description -- hence the separate binding
+      // below.
+        "keys": ["tab"], "command": "wiki_pick_link", "context":
         [
             { "key": "selector", "operator": "equal", "operand": "text.html.markdown & meta.link.reference.description.markdown", "match_all": true },
-            // { "key": "setting.mde.keymap_disable.make_page_reference", "operator": "not_equal", "operand": true }
+            { "key": "selection_empty", "operator": "equal", "operand": true, "match_all": true },
+            { "key": "overlay_visible", "operator": "equal", "operand": false },
+            { "key": "auto_complete_visible", "operator": "equal", "operand": false }
+        ]
+    },
+    { // The same picker on an existing [[link]], seeded with its current
+      // target -- so tab re-picks rather than retyping.
+      //
+      // This slot used to point at mde_pick_wiki_link_page_name, which DOES
+      // NOT EXIST: there is no such command anywhere in
+      // Installed Packages/MarkdownEditing.sublime-package. The binding had
+      // been dead for as long as it had been here, which is exactly the kind
+      // of thing a keymap never tells you.
+      //
+      // bracket_span() in WikiLinks.py handles both shapes, so one command
+      // serves both bindings; only the selector differs, for the prefix reason
+      // noted above.
+        "keys": ["tab"], "command": "wiki_pick_link", "context":
+        [
+            { "key": "selector", "operator": "equal", "operand": "meta.link.reference.wiki.description.markdown", "match_all": true },
+            { "key": "selection_empty", "operator": "equal", "operand": true, "match_all": true },
+            { "key": "overlay_visible", "operator": "equal", "operand": false },
+            { "key": "auto_complete_visible", "operator": "equal", "operand": false }
+        ]
+    },
+    { // Backlinks -- every note linking to this one, from the symbol index.
+      //
+      // This DISPLACES MarkdownEditing's mde_list_back_links, which answers the
+      // same question by reading every .md in the project (~2,400 files here,
+      // over OneDrive) where this is one native lookup. MDE's version stays in
+      // the command palette.
+      //
+      // Displacing it takes a settings key, NOT ordering. Sublime runs the last
+      // matching binding across the merged keymap and package order is ASCII --
+      // and since the rename this package is 'Markdown-Note-Harness', whose '-'
+      // (0x2D) sorts BEFORE 'E' (0x45), so 'MarkdownEditing' now loads AFTER it
+      // and wins every overlap. (That inverted the old note in CLAUDE.md, which
+      // was written when the directory was 'francis_sublime_package'.) What
+      // actually settles it is MarkdownExtended.sublime-settings, which sets
+      // MDE's own switch: mde.keymap_disable.list_back_links.
+      //
+      // The selector still has to be right, because MDE binds shift+f12 THREE
+      // times in markdown, in Default (Windows).sublime-keymap:
+      //   :1317 mde_reference_jump   on meta.link.reference.def.markdown ...
+      //   :1328 mde_magic_footnotes  on meta.link.reference.def.footnote ...
+      //   :1535 mde_list_back_links  on text.html.markdown - (meta.link | ...)
+      // Subtracting meta.link leaves the first two alone; only the third is
+      // being replaced. The second alternative then adds wiki links back in,
+      // because they ARE under meta.link and MDE therefore excluded them -- so
+      // without it shift+f12 would do nothing at all with the caret parked in
+      // a link, which is a common enough place for it to be. It does NOT ask
+      // about that link: wiki_backlinks reports the note in view wherever the
+      // caret is (see target_name() in WikiLinks.py). The link's own backlinks
+      // are the "Wiki: Show backlinks to link under caret" palette entry.
+      // Frontmatter links need no clause: they are markdown but not meta.link,
+      // so the first alternative already covers them.
+      //
+      // Note shift+f12 in markdown is NOT Sublime's goto_reference to begin
+      // with; nothing of Sublime's own is being given up here.
+        "keys": ["shift+f12"], "command": "wiki_backlinks", "context":
+        [
+            { "key": "selector", "operator": "equal", "operand": "text.html.markdown - (meta.link | markup.underline.link | variable), meta.link.reference.wiki.description.markdown", "match_all": true }
         ]
     }
 ]  

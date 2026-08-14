@@ -1,0 +1,36 @@
+{
+    // The note picker: tab inside [] , or "Wiki: Insert link to note".
+    //
+    // Candidates come from Sublime's symbol index, never from a directory
+    // walk. Each class C below is looked up as
+    // window.symbol_locations("C_note") -- the token is produced automatically
+    // by Symbol List - Email Flags.tmPreferences out of the note's frontmatter
+    // "class: C". So nothing is opened, and adding a class here is the whole
+    // change: no Python, no syntax edit.
+    //
+    // The corollary is that a note with NO class: key is invisible to the
+    // picker. That is deliberate -- classifying a note is what makes it a link
+    // target -- but it is worth knowing when one you expected is missing.
+    //
+    // Edit your copy in Packages/User/WikiLinks.sublime-settings rather than
+    // this file, so a package update does not overwrite it.
+    // (Preferences > Browse Packages, then User/.)
+
+    // Every class the picker knows about, in the order rows are listed. Each
+    // is also offered as a "/name" filter row, and those UNION rather than
+    // narrow: a note carries exactly one class, so intersecting two of them
+    // would always give nothing.
+    "link_classes": ["topic", "activity", "programme", "person",
+                     "organisation", "meeting", "memo", "document", "email"],
+
+    // Listed only once you ask for them by "/name". Emails are 1,746 of the
+    // 2,259 classified notes and their basenames run to 60 characters, so
+    // unfiltered they bury everything worth linking to.
+    "hidden_classes": ["email"],
+
+    // Skipped. fnmatch globs, tested against both the file name and the full
+    // path. The templates must stay out: activity_template.md and its four
+    // siblings carry a real "class:" and would otherwise sit in the list as
+    // linkable notes.
+    "exclude": ["*_template.md"]
+}

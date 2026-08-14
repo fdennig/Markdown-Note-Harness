@@ -1,0 +1,29 @@
+{
+    // Hand shift+f12 in markdown to this package's wiki_backlinks.
+    //
+    // MarkdownEditing binds mde_list_back_links to shift+f12 on
+    //     text.html.markdown - (meta.link | markup.underline.link | variable)
+    // in Default (Windows).sublime-keymap:1535, and guards that binding with
+    // this switch. Setting it is what makes the handover deterministic rather
+    // than a bet on package load order.
+    //
+    // The bet would LOSE, which is the whole point. Sublime runs the LAST
+    // matching binding across the merged keymap and package order is ASCII, so
+    // since the directory was renamed to 'Markdown-Note-Harness' this package
+    // sorts BEFORE 'MarkdownEditing' ('-' is 0x2D, 'E' is 0x45) and therefore
+    // loads first and loses every overlap. It won when the directory was called
+    // 'francis_sublime_package'; the note in CLAUDE.md predates the rename.
+    //
+    // Only overlapping bindings are affected. This package's F12 binding does
+    // not need the same treatment because its selector subtracts every scope
+    // MarkdownEditing binds F12 on, so the two never compete for one caret.
+    //
+    // Scoped to this syntax rather than set globally: syntax-specific settings
+    // are read from '<syntax base name>.sublime-settings' across every package,
+    // so this reaches MarkdownExtended views and nothing else. A key of the
+    // same name in Packages/User/MarkdownExtended.sublime-settings still wins,
+    // which is where to put 'false' to get MarkdownEditing's version back.
+    //
+    // Either way mde_list_back_links stays available from the command palette.
+    "mde.keymap_disable.list_back_links": true
+}
