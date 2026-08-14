@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>name</key><string>Wiki Link References (body)</string>
+
+    <!-- Body wiki links need no syntax of ours: the built-in Markdown package
+         already scopes them. BOTH BRACKETS FALL INSIDE THE META SCOPE, so both
+         have to be subtracted. In its 'link-ref-wiki' context the opening '[['
+         is the pushing match and the closing ']]' is the popping match, and a
+         'meta_scope' covers the text of both, and that is what separates it from
+         'meta_content_scope', which would have covered neither. The brackets
+         additionally carry punctuation.definition.link.begin/end.markdown, and
+         those are the only handles there are on them.
+
+         Subtracting both is therefore what isolates the bare target name, and
+         each omission fails the same way: with the end left in every symbol is
+         indexed as "name]]", with the begin left in as "[[name", and a lookup
+         by filename never hits either. THE SECOND FORM IS WHAT SHIPPED, for
+         long enough to be worth recording. It hid because it was symmetrical
+         with a matching mistake in WikiLinks.py, where name_under_caret() stripped
+         a trailing ']]' and not a leading '[[' on the same false premise, so
+         shift+f12 ON a body link queried "[[francis" and worked, while
+         shift+f12 anywhere else in the note queried "francis" and returned the
+         frontmatter hits alone. The whole body corpus was indexed and
+         unreachable. Note also what did NOT catch it: the reference counts in
+         CLAUDE.md were modelled in Python over the corpus rather than read back
+         out of Sublime, and a model of the selector cannot disagree with the
+         selector. What settled it was grepping Data/Index/*.ldb, where the
+         stored names read literally '[[eligible4ODA', '[[MASE', '[[CDP'.
+
+         THE OTHER TWO SUBTRACTIONS ARE NOT TIDINESS, THEY ARE THE PRICE OF NOT
+         DESTROYING TWO OTHER SYMBOL LISTS. Read this before removing either.
+
+         A .tmPreferences entry does not add to what other entries say. At each
+         point the HIGHEST SCORING selector wins and ITS settings are the only
+         ones that apply there. This entry matches two scopes and one of them
+         is deep on the stack, so it outscores anything matching the container:
+
+             markup.heading            MarkdownEditing, Symbol List - Heading
+             entity.name.tag.todo      ours, Symbol List - ToDos
+
+         Since this entry says showInSymbolList 0 and showInIndexedSymbolList 0,
+         winning inside one of those means punching a hole in the middle of the
+         container's own symbol region, which then survives only as the two
+         fragments either side of the link. The reported symptom was a project
+         symbol called "]]"; the real loss was the heading text itself, which
+         stopped being findable under the words it is written with.
+
+         MarkdownEditing uses this same mechanism deliberately in
+         'Symbol List - Hide.tmPreferences', which punches meta.toc-list.id out
+         of a heading. That is harmless only because an id sits at the END of a
+         line, so one run survives. A wiki link sits in the middle.
+
+         WHAT THE SUBTRACTIONS COST, measured on the vault rather than guessed:
+
+             219 headings hold 477 links, of which 233 point at a note that
+             exists. Of the 211 names reachable ONLY from a heading exactly two
+             are real notes (giorgiaCaropreso, simonaRuggieri); the rest are
+             dangling short forms like [[mpho]] and [[john??]] that no rename
+             could ever have touched.
+
+             304 of the 497 open todos hold 468 links, and these are the
+             expensive ones: 464 of them point at a real note, and six notes
+             are reachable only from a todo.
+
+         So roughly 700 real backlink rows are not listed, and a rename leaves
+         those links stale. That is a blind spot, so it is announced rather
+         than hidden: WikiLinks.py puts HEADING_NOTE in the rename confirmation
+         dialog and in Data/Logs/WikiLinks.log on every single run.
+
+         THE EXPERIMENT THAT WOULD WIN THEM ALL BACK is shipped inert beside
+         this file as
+
+             Reference List - Wiki In Symbols.tmPreferences.disabled
+
+         and takes about a minute to settle. It turns on an undocumented
+         question: whether Sublime builds a symbol region from adjacent points
+         that are merely all FLAGGED, or only from adjacent points owned by the
+         same ENTRY. If the former, the containers stay whole and every link
+         comes back and these two subtractions can go. If the latter, nothing
+         is worse than it was when the bug was reported. -->
+    <key>scope</key>
+    <string>text.html.markdown meta.link.reference.wiki.description.markdown - punctuation.definition.link.begin.markdown - punctuation.definition.link.end.markdown - markup.heading - entity.name.tag.todo</string>
+
+    <key>settings</key>
+    <dict>
+        <!-- References, not definitions, and deliberately so. A wiki link is a
+             USE of a note, not a declaration of one, and SYMBOL_TYPE_REFERENCE
+             is what window.symbol_locations() filters on. Staying out of the
+             definition namespace also keeps these clear of the '_note' tokens
+             and of MarkdownEditing's '#'-prefixed headings, which all share one
+             flat global namespace (see CLAUDE.md).
+
+             Out of the per-file list too: ctrl+R is for navigating the file you
+             are in, and a note's own outbound links are not landmarks. -->
+        <key>showInSymbolList</key><integer>0</integer>
+        <key>showInIndexedSymbolList</key><integer>0</integer>
+        <key>showInIndexedReferenceList</key><integer>1</integer>
+
+        <!-- NO symbolIndexTransformation, on purpose. The selector above
+             already yields exactly the target name, so the indexed symbol is
+             literally the text in the file, and a rename can compare it against
+             a filename with no decoding step in between. Symbol List
+             ToDos.tmPreferences records what it cost, once, to make a symbol's
+             identity hostage to a regex. -->
+
+        <!-- Cosmetic only. WikiLinks.py labels a backlink row by kind when one
+             is present and behaves identically when it is not: no shipped
+             package uses this key, so whether it survives into
+             SymbolLocation.kind on an indexed REFERENCE is unverified. Nothing
+             depends on the answer. It differs from the frontmatter file's kind
+             purely so the question can be settled by looking at a result. -->
+        <key>kind</key><string>markup.list</string>
+    </dict>
+</dict>
+</plist>

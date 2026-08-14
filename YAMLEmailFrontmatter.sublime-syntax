@@ -72,3 +72,104 @@ contexts:
             1: entity.name.attachment.yaml
         - match: ^(?=\S)|^(?=\s*$)
           pop: true
+
+    # ---------------------------------------------------------------------
+    # Derived wiki links -- the graph edges, indexed as REFERENCES.
+    #
+    # These four keys are WikiResolve's (DERIVED_KEYS in the vault's
+    # scripts/wikiresolve_core.py) and they hold person-note BASENAMES. The raw
+    # from:/to: keys above hold display names that resolve to nothing, which is
+    # why only these are scoped: indexing 9,255 '[[@Display Name]]' forms would
+    # make every reference list mostly noise, and they are macro-owned and
+    # never edited anyway.
+    #
+    # Reference List - Wiki Frontmatter.tmPreferences indexes the scopes below,
+    # so window.symbol_locations(name, ..., SYMBOL_TYPE_REFERENCE) answers "who
+    # links to this note?" without reading a single file. Keep the two in step:
+    # a scope added here and not indexed there is invisible; a scope indexed
+    # there and not produced here is dead.
+    #
+    # ONE SYMBOL PER LIST ITEM, NEVER ONE PER KEY. A symbol is a contiguous run
+    # of the selector, so the sequence keys below scope each '[[name]]' on its
+    # own and the key line scopes nothing. Scoping a key's whole value would
+    # collapse a hundred recipients into one symbol whose name is not a
+    # basename -- and rename_note would then have one location to rewrite where
+    # it needs a hundred.
+    #
+    # The capture is the BARE NAME: the quotes and the [[ ]] are consumed
+    # outside the group, so the indexed symbol is literally the text in the
+    # file and no symbolIndexTransformation is involved. That matters -- the
+    # index stores transformed names, and Symbol List - ToDos.tmPreferences
+    # records what it cost to make an identity hostage to a regex.
+    #
+    # Four distinct scopes rather than one shared scope, because a
+    # .tmPreferences is keyed by scope: this is what lets each relation carry
+    # its own kind (or its own name marker) without touching this file again.
+    #
+    # 'optional_attendees:' deliberately gets nothing -- it folds into
+    # 'attendees_wiki:', which is the one derived sequence.
+    # ---------------------------------------------------------------------
+
+    # Scalar derived keys. An EMPTY 'from_wiki:' matches nothing here, on
+    # purpose: empty means resolved-to-nothing and absent means the resolver
+    # has never run, and neither is a graph edge.
+    - match: ^(from_wiki)\s*:\s*"\[\[([^\[\]"\r\n]+)\]\]"
+      scope: meta.email.wikilink-line.yaml
+      captures:
+        1: keyword.other.email.wikilink.key.yaml
+        2: entity.name.wikilink.from.yaml
+
+    - match: ^(organizer_wiki)\s*:\s*"\[\[([^\[\]"\r\n]+)\]\]"
+      scope: meta.email.wikilink-line.yaml
+      captures:
+        1: keyword.other.email.wikilink.key.yaml
+        2: entity.name.wikilink.organizer.yaml
+
+    # 'responsible:' is hand-authored rather than macro-written, but it belongs
+    # here for the same reason the derived keys do: it holds a BASENAME, not a
+    # display name (36 links across 34 notes, not one of them an '@' form).
+    # What decides whether a key is scoped is what its value points AT, not who
+    # writes it. Leaving it out would mean renaming a person silently orphaned
+    # every activity they are accountable for.
+    #
+    # Matched precisely rather than by a forgiving "scope any [[..]] after the
+    # key" rule, and the templates are why: activity_template.md and
+    # programme_template.md carry
+    #     responsible:   # "[[person]]" -- the one person accountable...
+    # so a rule that scanned the rest of the line would index a phantom edge to
+    # a note called 'person' out of every template in the vault.
+    - match: ^(responsible)\s*:\s*"\[\[([^\[\]"\r\n]+)\]\]"
+      scope: meta.email.wikilink-line.yaml
+      captures:
+        1: keyword.other.email.wikilink.key.yaml
+        2: entity.name.wikilink.responsible.yaml
+
+
+    # Sequence derived keys. The pushed context scopes every '[[name]]' it
+    # meets and pops at the next column-0 key (or a blank line), exactly as the
+    # attachments rule above does. Scanning resumes mid-line after the key
+    # match, so this covers the flow form 'to_wiki: ["[[a]]", "[[b]]"]' as well
+    # as the block form WikiResolve actually writes -- and 'to_wiki: []' yields
+    # no item, because there is no '[[' in it.
+    #
+    # The pop rules come first so a column-0 key always wins the tie: both can
+    # match on the same line, and Sublime breaks a positional tie by order.
+    - match: '^(to_wiki)\s*:'
+      captures:
+        1: keyword.other.email.wikilink.key.yaml
+      push:
+        - match: ^(?=\S)|^(?=\s*$)
+          pop: true
+        - match: \[\[([^\[\]"\r\n]+)\]\]
+          captures:
+            1: entity.name.wikilink.to.yaml
+
+    - match: '^(attendees_wiki)\s*:'
+      captures:
+        1: keyword.other.email.wikilink.key.yaml
+      push:
+        - match: ^(?=\S)|^(?=\s*$)
+          pop: true
+        - match: \[\[([^\[\]"\r\n]+)\]\]
+          captures:
+            1: entity.name.wikilink.attendees.yaml

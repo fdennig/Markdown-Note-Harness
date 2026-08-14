@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>name</key><string>Wiki Link References (frontmatter)</string>
+
+    <!-- Assigned by YAMLEmailFrontmatter.sublime-syntax to the BARE NAME inside
+         each frontmatter wiki link: the quotes and the brackets are consumed
+         outside the capture group, so no transformation is needed here.
+
+         Matched by prefix, so a relation added to the syntax later is indexed
+         without touching this file. The five that exist today are:
+
+             entity.name.wikilink.from.yaml          from_wiki:
+             entity.name.wikilink.to.yaml            to_wiki:
+             entity.name.wikilink.organizer.yaml     organizer_wiki:
+             entity.name.wikilink.attendees.yaml     attendees_wiki:
+             entity.name.wikilink.responsible.yaml   responsible:
+
+         Only keys holding a BASENAME are scoped. The raw from:/to:/organizer:/
+         attendees: keys hold display names such as "[[@Demba Tandia]]" that
+         resolve to no file, are owned by the Outlook macro, and are never
+         edited from this side; indexing their 9,255 occurrences would bury
+         every real hit. 'responsible:' is hand written rather than macro
+         written but holds a basename, so it is in: what decides is what the
+         value points AT, not who wrote it. -->
+    <key>scope</key>
+    <string>entity.name.wikilink</string>
+
+    <key>settings</key>
+    <dict>
+        <!-- Same reasoning as the body file: references only, never
+             definitions, and never in the per-file list. -->
+        <key>showInSymbolList</key><integer>0</integer>
+        <key>showInIndexedSymbolList</key><integer>0</integer>
+        <key>showInIndexedReferenceList</key><integer>1</integer>
+
+        <!-- Deliberately different from the body file's kind, so a glance at
+             SymbolLocation.kind settles whether this key reaches indexed
+             references at all. Cosmetic either way. -->
+        <key>kind</key><string>variable.parameter</string>
+    </dict>
+</dict>
+</plist>

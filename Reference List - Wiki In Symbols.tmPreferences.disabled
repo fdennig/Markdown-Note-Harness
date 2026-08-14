@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    INERT. Sublime loads .tmPreferences, not .tmPreferences.disabled, so this
+    file does nothing where it sits. Note that .tmPreferences ARE found
+    recursively inside a package, so moving it to a subdirectory would NOT
+    disable it; the extension is the switch.
+
+    WHAT IT IS FOR
+
+    'Reference List - Wiki Body.tmPreferences' subtracts markup.heading and
+    entity.name.tag.todo, which costs roughly 700 real backlinks: a wiki link
+    written inside a heading or inside an open todo is not indexed, so
+    'Wiki: Show backlinks' does not list it and 'Wiki: Rename note and
+    backlinks' does not rewrite it.
+
+    The subtractions are there because at any point only the highest scoring
+    .tmPreferences entry applies, and the wiki entry outscores both container
+    entries. Since the wiki entry keeps its points out of both symbol lists,
+    winning inside a heading or a todo cut that container's symbol in half.
+    The reported symptom was a project symbol called ']]'.
+
+    This file is the way out, IF an undocumented question happens to fall the
+    right way: does Sublime build a symbol region out of adjacent points that
+    are merely all FLAGGED for a list, or only out of adjacent points owned by
+    the same ENTRY? Nothing in the API reference or in symbols documentation
+    says, and no headless test reproduces the indexer, so the only way to know
+    is to look.
+
+    HOW TO SETTLE IT (about a minute)
+
+      1. Rename this file to drop the '.disabled' suffix.
+      2. Open a note with a todo that contains a wiki link (todoUNDP.md has
+         about 300) and press ctrl+R.
+           * one entry per todo, whole   -> FLAGGED wins. Good outcome.
+           * fragments such as '[[', a bare name, ']] and then'  -> ENTRY wins.
+      3. Open meetingsFY2324.md and press ctrl+R, then ctrl+shift+R, and look
+         at a '## people: [[a]] [[b]]' heading for the same thing.
+      4. If FLAGGED won: delete '- markup.heading - entity.name.tag.todo' from
+         the selector in 'Reference List - Wiki Body.tmPreferences', keep this
+         file enabled, drop HEADING_NOTE from WikiLinks.py, and re-measure the
+         reference counts in CLAUDE.md. Consider splitting this entry in two so
+         the todo half can keep showInIndexedSymbolList 0.
+         If ENTRY won: put the '.disabled' back. Nothing is worse than it was;
+         the containers were already fragmented when the bug was reported.
+
+    WHAT IT DOES DIFFERENTLY
+
+    It matches wiki link targets only where they sit INSIDE one of the two
+    containers, which makes it outscore both the container entry and the plain
+    body entry, and it sets every list flag to 1 instead of 0. So the points
+    stay flagged for the symbol lists their container wanted them in, and are
+    additionally offered as references.
+
+    The known cost, even in the good outcome: bare target names reach the
+    DEFINITION namespace, which is flat and shared with the '_note' tokens and
+    with MarkdownEditing's '#'-prefixed headings. A note called 'cristina'
+    would then answer both a definition and a reference lookup for 'cristina'.
+    Splitting this entry in two (headings keep showInIndexedSymbolList 1, todos
+    go back to 0) confines that to headings, which is the point of step 4.
+-->
+<plist version="1.0">
+<dict>
+    <key>name</key><string>Wiki Link References (inside headings and todos)</string>
+
+    <key>scope</key>
+    <string>text.html.markdown markup.heading meta.link.reference.wiki.description.markdown - punctuation.definition.link.begin.markdown - punctuation.definition.link.end.markdown, text.html.markdown entity.name.tag.todo meta.link.reference.wiki.description.markdown - punctuation.definition.link.begin.markdown - punctuation.definition.link.end.markdown</string>
+
+    <key>settings</key>
+    <dict>
+        <key>showInSymbolList</key><integer>1</integer>
+        <key>showInIndexedSymbolList</key><integer>1</integer>
+        <key>showInIndexedReferenceList</key><integer>1</integer>
+        <key>kind</key><string>markup.list</string>
+    </dict>
+</dict>
+</plist>
