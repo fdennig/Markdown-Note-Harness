@@ -17,7 +17,7 @@ PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ---------------- stubs ----------------
 
 SETTINGS = {
-    "classes": ["topic", "activity", "programme"],
+    "classes": ["topic", "activity", "programme", "person"],
     "always_include": [],
     "exclude": ["*_template.md"],
     "overview": "",
@@ -148,8 +148,38 @@ class: programme
 # Energy for Growth
 
 - [ ] confirm the co-financing letter
+- [ ] [[cristina]]: settle the board composition
+- [ ] send the pack to [[susanaLopez]]
 - [ ] chase [the annex](https://example.com/a?b=1&c=2) from [[cristina]]
 - [x] draft the terms of reference
+""")
+
+# Person notes. francis.md declares itself the vault owner exactly as the real
+# one does, so his 41 todos never become a heading of their own.
+personA = write("cristina.md", u"""---
+class: person
+---
+- [ ] chase the DoA
+""")
+
+personB = write("susanaLopez.md", u"""---
+class: person
+---
+- [ ] currency
+""")
+
+personC = write("francis.md", u"""---
+class: person
+self: true
+---
+- [ ] [[francis]]: my own thing
+""")
+
+# Named in a todo but owed nothing -- must not open a heading.
+personD = write("mphoMataboge.md", u"""---
+class: person
+---
+# Mpho
 """)
 
 noteB = write("recoverableGrants.md", u"""---
@@ -170,19 +200,24 @@ class: email
 - [ ] leaked from an email
 """)
 
-write("todoUNDP.md", u"""# Capture
+write("todoUNDP.md", u"""# Aggregate
+
+## Inline capture
 
 - [ ] call the auditor
-
-## Completed (History)
-
-- [x] something old [[francis]] <!-- resolved: 2026-08-01 -->
 """)
+
+DONE = os.path.join(VAULT, "todoUNDPdone.md")
+
+
+def done():
+    return read("todoUNDPdone.md") if os.path.exists(DONE) else ""
 
 INDEX = {
     "programme_note": [noteA, os.path.join(VAULT, "programme_template.md")],
     "topic_note": [noteB],
     "activity_note": [],
+    "person_note": [personA, personB, personC, personD],
     "email_note": [os.path.join(VAULT, "Email_2026-01-26 @someone - subject.md")],
 }
 WINDOW = Window(VAULT, INDEX)
@@ -203,15 +238,15 @@ def generated():
 
 
 def tail():
-    lines = T.read_lines(os.path.join(VAULT, "todoUNDP.md"))
-    _c, _g, t = T.split_zones(lines)
-    return "".join(t)
+    """The work log. It used to be the overview's own tail, and every check
+    that reads it is asking the same question, so the name is kept."""
+    return done()
 
 
 print("\n1. scope")
 scope = T.in_scope(WINDOW, os.path.join(VAULT, "todoUNDP.md"))
 names = sorted(T.display_name(p) for p in scope.values())
-check("3 files in scope", len(scope) == 3, str(names))
+check("7 files in scope", len(scope) == 7, str(names))
 check("template excluded", "programme_template" not in names)
 check("email excluded", not any(n.startswith("Email_") for n in names))
 check("overview always included", "todoUNDP" in names)
@@ -223,14 +258,30 @@ check("urgent section present", "## Urgent" in g)
 check("urgent todo rendered", "- [ ] ! decide the waiver threshold [[recoverableGrants]]" in g)
 check("inbox lists external todo",
       "- [ ] confirm the co-financing letter [[EnergyForGrowth]]" in g)
-check("by-file groups it", "## EnergyForGrowth" in g and "- [ ] confirm the co-financing letter\n" in g)
+check("no by-file section", "# By File" not in g and "## EnergyForGrowth" not in g)
+check("by-person section present", "# By Person" in g)
+check("assignee gets a heading", "## cristina" in g)
+check("leading slot dropped under her heading",
+      "- [ ] settle the board composition [[EnergyForGrowth]]\n" in g)
+check("leading slot kept in Inbox",
+      "- [ ] [[cristina]]: settle the board composition [[EnergyForGrowth]]\n" in g)
+check("todo living in a person note is hers",
+      "## susanaLopez" in g and "- [ ] currency [[susanaLopez]]\n" in g)
+check("her own note's todo also grouped", "- [ ] chase the DoA [[cristina]]\n" in g)
+check("mention listed under her", "_mentioned in_" in g)
+check("mention keeps the row whole",
+      "- [ ] chase [the annex](https://example.com/a?b=1&c=2) from [[cristina]] [[EnergyForGrowth]]\n" in g)
+check("vault owner gets no heading", "## francis" not in g)
+check("owner's todo still in Inbox",
+      "- [ ] [[francis]]: my own thing [[francis]]\n" in g)
+check("mentioned but owed nothing gets no heading", "## mphoMataboge" not in g)
 check("capture todo absent from inbox", "call the auditor" not in g)
 check("checked todo not listed", "terms of reference" not in g)
 check("template placeholder absent", "placeholder" not in g)
 check("email todo absent", "leaked" not in g)
 check("url survives verbatim",
       "chase [the annex](https://example.com/a?b=1&c=2) from [[cristina]] [[EnergyForGrowth]]" in g)
-check("history preserved", "something old" in tail())
+check("no work log before anything completes", not done())
 
 print("\n3. tick in the overview -> writes into the note")
 path = os.path.join(VAULT, "todoUNDP.md")
@@ -245,6 +296,37 @@ T.apply_overview_edits(WINDOW)
 check("source note ticked", "- [x] confirm the co-financing letter" in read("EnergyForGrowth.md"))
 check("gone from generated zone", "confirm the co-financing letter" not in generated())
 check("landed in history", "- [x] confirm the co-financing letter [[EnergyForGrowth]] <!-- resolved:" in tail())
+
+print("\n3b. tick under a person heading keeps the assignee slot")
+# The By Person row has had its leading [[cristina]]: dropped, so the
+# write-back has to put it back before matching -- edit_source rewrites the
+# line with whatever text it is handed, and a stripped one would erase it.
+out = []
+for ln in T.read_lines(path):
+    if ln.startswith("- [ ] settle the board composition [[EnergyForGrowth]]"):
+        ln = ln.replace("- [ ]", "- [x]", 1)
+    out.append(ln)
+T.write_lines(path, out)
+T.apply_overview_edits(WINDOW)
+check("slot survives in the note",
+      "- [x] [[cristina]]: settle the board composition" in read("EnergyForGrowth.md"))
+check("gone from generated zone", "settle the board composition" not in generated())
+check("history keeps the full text",
+      "- [x] [[cristina]]: settle the board composition [[EnergyForGrowth]]" in tail())
+
+print("\n3c. a todo whose own text ends in a wiki link still resolves")
+out = []
+for ln in T.read_lines(path):
+    if ln.startswith("- [ ] send the pack to [[susanaLopez]] [[EnergyForGrowth]]"):
+        ln = ln.replace("- [ ]", "- [x]", 1)
+    out.append(ln)
+T.write_lines(path, out)
+WINDOW.messages = []
+T.apply_overview_edits(WINDOW)
+check("source note ticked whole",
+      "- [x] send the pack to [[susanaLopez]]" in read("EnergyForGrowth.md"))
+check("nothing reported missing",
+      not any("not found" in m for m in WINDOW.messages), str(WINDOW.messages))
 
 print("\n4. tick in the note -> reaches history with no matching")
 src = read("recoverableGrants.md").replace("- [ ] ! decide", "- [x] ! decide")
@@ -293,8 +375,9 @@ for ln in T.read_lines(path):
     out.append(ln)
 T.write_lines(path, out)
 T.sync(WINDOW)
-check("capture urgent reaches Urgent", "- [ ] ! call the auditor\n" in generated())
-check("still not in By File", "## todoUNDP" not in generated())
+check("capture urgent reaches Urgent",
+      "- [ ] ! call the auditor [[todoUNDP]]\n" in generated())
+check("overview is not a person", "## todoUNDP" not in generated())
 
 out = []
 for ln in T.read_lines(path):
@@ -310,6 +393,7 @@ saved = dict(INDEX)
 INDEX["programme_note"] = []
 INDEX["topic_note"] = []
 INDEX["activity_note"] = []
+INDEX["person_note"] = []
 before = generated()
 T.sync(WINDOW)
 check("todos survive the index going dark", generated() == before,
@@ -328,6 +412,7 @@ check("recovers once the index returns", generated() == before)
 INDEX["programme_note"] = []
 INDEX["topic_note"] = []
 INDEX["activity_note"] = []
+INDEX["person_note"] = []
 T.sync(WINDOW)
 check("cache-recorded classes alone hold scope open", generated() == before)
 
@@ -452,6 +537,51 @@ before = probe("changed")
 listener.on_post_save_async(View(nochange, WINDOW))
 check("overview rewritten", probe("changed")[0] != before[0])
 check("todo present", "a new one" in generated())
+
+print("\n18. the work log groups by month, newest first")
+OVER = os.path.join(VAULT, "todoUNDP.md")
+os.remove(DONE)
+real_today = T.today
+
+
+def at(stamp):
+    T.today = lambda: stamp
+
+
+at("2026-05-04")
+T.append_done(OVER, [{"text": "may one", "source": "EnergyForGrowth"}])
+T.append_done(OVER, [{"text": "may two", "urgent": True, "source": "recoverableGrants"}])
+d = done()
+check("one heading for the month", d.count("## 2026-05") == 1)
+check("newest row first in the month",
+      d.index("may two") < d.index("may one"))
+check("urgency and source carried",
+      "- [x] ! may two [[recoverableGrants]] <!-- resolved: 2026-05-04 -->" in d)
+check("header written once", d.count("# Completed") == 1)
+
+at("2026-07-02")
+T.append_done(OVER, [{"text": "july one", "source": "EnergyForGrowth"}])
+d = done()
+check("a newer month goes above the older one",
+      d.index("## 2026-07") < d.index("## 2026-05"))
+
+at("2026-03-09")
+T.append_done(OVER, [{"text": "march one", "source": "EnergyForGrowth"}])
+d = done()
+check("an older month goes below both",
+      d.index("## 2026-05") < d.index("## 2026-03"))
+
+at("2026-05-30")
+T.append_done(OVER, [{"text": "may three", "source": "EnergyForGrowth"}])
+d = done()
+check("a second row reuses its month heading", d.count("## 2026-05") == 1)
+check("and lands at the top of it",
+      d.index("may three") < d.index("may two") < d.index("may one"))
+check("months still descend",
+      d.index("## 2026-07") < d.index("## 2026-05") < d.index("## 2026-03"))
+check("nothing empty appended", not T.append_done(OVER, []))
+check("the overview was never touched", "resolved:" not in read("todoUNDP.md"))
+T.today = real_today
 
 print("\n" + ("ALL PASS" if not FAILS else "FAILURES: " + ", ".join(FAILS)))
 shutil.rmtree(TMP, ignore_errors=True)

@@ -144,11 +144,50 @@ nothing at all: the class is read from the buffer, so there is no index lookup a
 no file read. And a sweep that finds no change doesn't rewrite `todoUNDP.md`, so
 there is no OneDrive churn and an open overview isn't reverted under your cursor.
 
-`todoUNDP.md` has three zones: a hand-written `# Capture` zone at the top (swept
-like any other note, so quick capture needs no special case), the generated zone
-between the `todosync:` markers, and `## Completed` at the bottom. Only the middle
-one is ever rewritten, so pruning `- [x]` lines out of your notes does not disturb
-the history.
+`todoUNDP.md` has two zones: a hand-written `# Aggregate` / `## Inline capture`
+zone at the top (swept like any other note, so quick capture needs no special
+case), and the generated zone between the `todosync:` markers. Only the generated
+zone is ever rewritten.
+
+Completed todos go to **`todoUNDPdone.md`**, a work log in `## YYYY-MM` sections,
+newest first. It lives in its own file because it is the one thing here that is
+*not* derived — delete the cache and the next sweep rebuilds it, but nothing can
+rebuild the log, which is precisely what makes it safe to prune `- [x]` lines out
+of your notes. It is a record of what was closed, not of what was decided: a tick
+says an intention was discharged and nothing about the outcome, so a decision's
+answer belongs in its hub's `@Log` before the box is ticked.
+
+The generated zone closes the `# Aggregate` section with `## Urgent` and
+`## Inbox`, then regroups everything under `# By Person`:
+
+```markdown
+# By Person
+
+## cristina
+- [ ] ! set up meeting with financial institutions on a clean cooking loan [[CDP]]
+- [ ] settle the composition and mandate of the PISTA board [[PISTA]]
+
+## estabanBermudezForn
+- [ ] send spreadsheet with energy for growth team for alignment call [[estabanBermudezForn]]
+
+_mentioned in_
+- [ ] have a look at the GEF non-grant instrument (NGI) that [[estabanBermudezForn]] shared: [[vassilcaJeremias]]
+```
+
+A todo belongs to whoever its leading `[[person]]:` slot names, or failing that to
+the person note it was written in — so `- [ ] currency` in `susanaLopez.md` is hers
+without any slot. Your own todos never get a heading; they are the Inbox. Someone
+merely *named* in another person's todo is listed under `_mentioned in_`, but only
+if they already have work of their own, so a passing mention never opens a heading.
+
+Under a person's heading the leading slot comes off, since it just repeats the
+heading. The **trailing** link stays: that is the source hub, and it is what a tick
+is written back through. Tick a box anywhere — Urgent, Inbox or By Person — and the
+line in the source note is ticked once, slot intact.
+
+There is no by-file section. Every row names its hub, and a hub's own todos are
+already legible in the hub, so grouping by file only reprinted what one hop away
+said. Grouping by person is the view no single note can give.
 
 Delete `todoUNDP.cache.json` and the next sweep rebuilds it identically. It exists
 to gate reads on `(mtime, size)`, to tell *completed* from *deleted*, and to find

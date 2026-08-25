@@ -39,6 +39,12 @@ import re
 
 SETTINGS_FILE = "TodoSync.sublime-settings"
 OVERVIEW_NAME = "todoUNDP.md"
+# The work log. Deliberately a second file: it is the one authoritative,
+# never-re-derived thing in a system whose whole premise is that the notes are
+# the source of truth, and at 267 rows it had grown to half of the overview a
+# person actually reads. Being irreplaceable is a reason to keep it, not a
+# reason to keep it underfoot.
+DONE_NAME = "todoUNDPdone.md"
 CACHE_NAME = "todoUNDP.cache.json"
 
 # The generated zone is delimited by markers rather than by heading names, so
@@ -48,6 +54,8 @@ END_MARK = "<!-- todosync:end -->"
 BEGIN_RE = re.compile(r"^<!--\s*todosync:begin\b.*-->\s*$")
 END_RE = re.compile(r"^<!--\s*todosync:end\b.*-->\s*$")
 COMPLETED_RE = re.compile(r"^#{1,6}\s+completed\b", re.I)
+# A month section in the work log.
+MONTH_RE = re.compile(r"^##[ \t]+(\d{4}-\d{2})[ \t]*$")
 
 # A checkbox line. Group 3 is the box, group 4 the text.
 TODO_RE = re.compile(r"^([ \t]*)([-*+])[ \t]+\[([ xX])\][ \t]+(\S.*?)[ \t]*$")
@@ -55,6 +63,12 @@ TODO_RE = re.compile(r"^([ \t]*)([-*+])[ \t]+\[([ xX])\][ \t]+(\S.*?)[ \t]*$")
 # so toggling it never changes a todo's identity.
 URGENT_RE = re.compile(r"^!\s+(.*)$")
 CLASS_RE = re.compile(r"^class\s*:\s*([A-Za-z0-9_-]+)\s*$", re.M)
+# The vault owner marks their own person note. Kept in the note rather than
+# in settings so the fact travels with the vault, as WikiResolve does it.
+SELF_RE = re.compile(r"^self\s*:\s*true\s*$", re.M | re.I)
+# The assignee slot: a wiki link opening the todo, followed by a colon.
+LEAD_RE = re.compile(r"^\[\[([^\[\]]+)\]\]\s*:\s*(.*)$")
+WIKI_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
 # Frontmatter only, so a 'class:' in a code block cannot pull a note into scope.
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)^(?:---|\.\.\.)[ \t]*\r?\n",
                             re.S | re.M)
@@ -141,6 +155,12 @@ def frontmatter_class(text):
     return found.group(1) if found else None
 
 
+def frontmatter_self(text):
+    """True when this is the vault owner's own person note."""
+    block = FRONTMATTER_RE.match(text)
+    return bool(block and SELF_RE.search(block.group(1)))
+
+
 def excluded(path):
     name = os.path.basename(path)
     return any(fnmatch.fnmatch(name, p) or fnmatch.fnmatch(path, p)
@@ -162,6 +182,14 @@ def overview_path(window):
     return None
 
 
+def done_path(overview):
+    return os.path.join(os.path.dirname(overview), DONE_NAME)
+
+
+def month(stamp):
+    return stamp[:7]
+
+
 def cache_path(overview):
     return os.path.join(os.path.dirname(overview), CACHE_NAME)
 
@@ -169,16 +197,16 @@ def cache_path(overview):
 def load_cache(overview):
     path = cache_path(overview)
     if not os.path.exists(path):
-        return {"version": 2, "files": {}}
+        return {"version": 3, "files": {}}
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if data.get("version") != 2 or "files" not in data:
-            return {"version": 2, "files": {}}
+        if data.get("version") != 3 or "files" not in data:
+            return {"version": 3, "files": {}}
         return data
     except Exception as e:
         log("cache unreadable, starting empty: {}".format(e))
-        return {"version": 2, "files": {}}
+        return {"version": 3, "files": {}}
 
 
 def save_cache(overview, cache):
@@ -259,9 +287,11 @@ def parse(lines, stop_at_marker=False):
 def scan_file(path, is_overview):
     lines = read_lines(path)
     unchecked, checked = parse(lines, stop_at_marker=is_overview)
+    head = "".join(lines[:40])
     return {
         "path": path,
-        "class": frontmatter_class("".join(lines[:40])),
+        "class": frontmatter_class(head),
+        "self": frontmatter_self(head),
         "unchecked": unchecked,
         "checked": checked,
     }
@@ -383,17 +413,76 @@ def split_zones(lines):
 
 
 def collect(cache, overview):
-    """Every open todo, as (display, path, row, text, urgent, from_capture)."""
+    """Every open todo, as a dict. Carries the source note's class, because
+    that is half of what decides whose todo it is."""
     ov = key(overview)
     items = []
     for k, record in cache["files"].items():
         path = record.get("path", k)
         name = display_name(path)
         for entry in record.get("unchecked", []):
-            items.append((name, path, entry["row"], entry["text"],
-                          entry.get("urgent", False), k == ov))
-    items.sort(key=lambda t: (t[0].lower(), t[2]))
+            items.append({
+                "source": name,
+                "path": path,
+                "row": entry["row"],
+                "text": entry["text"],
+                "urgent": entry.get("urgent", False),
+                "capture": k == ov,
+                "class": record.get("class"),
+            })
+    items.sort(key=lambda i: (i["source"].lower(), i["row"]))
     return items
+
+
+def people_index(cache):
+    """(person basenames, the vault owner's name) from the notes already swept.
+
+    No index call and no extra read: the sweep already recorded every note's
+    class, and francis.md already declares `self: true` for WikiResolve."""
+    persons, me = set(), None
+    for record in cache["files"].values():
+        path = record.get("path")
+        if not path or record.get("class") != "person":
+            continue
+        name = display_name(path)
+        persons.add(name)
+        if record.get("self"):
+            me = name
+    return persons, me
+
+
+def assignee(item, persons, me):
+    """Whose todo this is: the leading [[person]]: slot, or failing that the
+    person note it was written in. None for the vault owner's own todos -- they
+    are the Inbox -- and for anything naming nobody."""
+    m = LEAD_RE.match(item["text"])
+    if m and m.group(1) in persons:
+        who = m.group(1)
+    elif item["class"] == "person" and item["source"] in persons:
+        who = item["source"]
+    else:
+        return None
+    return None if who == me else who
+
+
+def by_person(items, persons, me):
+    """(assigned, mentioned), keyed by person.
+
+    A mention is a person named inside somebody else's todo. It is listed only
+    under a person who already has work of their own, so a name you owe nothing
+    to never opens a heading of its own."""
+    assigned, mentioned = {}, {}
+    for item in items:
+        who = assignee(item, persons, me)
+        if who:
+            assigned.setdefault(who, []).append(item)
+        for name in WIKI_RE.findall(item["text"]):
+            if name in persons and name != me and name != who                     and item not in mentioned.setdefault(name, []):
+                mentioned[name].append(item)
+    for name in list(mentioned):
+        if name not in assigned or not mentioned[name]:
+            del mentioned[name]
+    return assigned, mentioned
 
 
 def render_line(text, urgent, source=None):
@@ -403,88 +492,150 @@ def render_line(text, urgent, source=None):
     return line
 
 
-def build_generated(items, nl):
-    """Urgent cross-cuts everything including the capture zone. Inbox and By
-    File skip capture-zone todos -- they are already visible a few lines up."""
+def person_line(item, person):
+    """Under a person's own heading the leading [[person]]: slot is repetition
+    of the heading, so it comes off. The trailing source link stays: it is not
+    decoration, it is what the write-back resolves a tick against.
+
+    A mention row keeps its slot, because there it names somebody else -- who
+    is on the hook is the useful half of a row filed under a third party."""
+    text = item["text"]
+    m = LEAD_RE.match(text)
+    if m and m.group(1) == person and m.group(2).strip():
+        text = m.group(2).strip()
+    return render_line(text, item["urgent"], item["source"])
+
+
+def build_generated(items, nl, persons=(), me=None):
+    """The generated zone: ## Urgent and ## Inbox close the hand-written
+    # Aggregate section above the marker, then # By Person regroups the lot.
+
+    There is deliberately no "by file" section. The source hub of every row is
+    named by its trailing wiki link, and a hub's own todos are legible in the
+    hub itself -- so grouping by file here only reprinted what one hop away
+    already says. Grouping by person is the view no single note can give."""
     out = []
 
     def put(s=""):
         out.append(s + nl)
-
-    urgent = [i for i in items if i[4]]
-    external = [i for i in items if not i[5]]
 
     # Stamped on every render but ignored when deciding whether anything
     # changed, so it reads as "when the todos last moved", not "last swept".
     put("_Updated {}_".format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M")))
     put()
 
+    # Urgent cross-cuts everything, the capture zone included.
+    urgent = [i for i in items if i["urgent"]]
     if urgent:
         put("## Urgent")
         put()
-        for name, _p, _r, text, _u, from_capture in urgent:
-            put(render_line(text, True, None if from_capture else name))
+        for item in urgent:
+            put(render_line(item["text"], True, item["source"]))
         put()
 
+    # Inbox skips capture-zone todos -- they are already legible a few lines up
+    # under ## Inline capture.
     put("## Inbox")
     put()
-    normal = [i for i in external if not i[4]]
+    normal = [i for i in items if not i["urgent"] and not i["capture"]]
     if not normal:
         put("_No open todos._")
     else:
-        for name, _p, _r, text, _u, _c in normal:
-            put(render_line(text, False, name))
+        for item in normal:
+            put(render_line(item["text"], False, item["source"]))
     put()
 
-    put("# By File")
+    put("# By Person")
     put()
-    groups = {}
-    for name, _p, _r, text, urg, _c in external:
-        groups.setdefault(name, []).append((text, urg))
-    for name in sorted(groups, key=lambda s: s.lower()):
+    assigned, mentioned = by_person(items, persons, me)
+    if not assigned and not mentioned:
+        put("_Nobody named._")
+        put()
+    for name in sorted(set(assigned) | set(mentioned), key=lambda s: s.lower()):
         put("## {}".format(name))
-        for text, urg in groups[name]:
-            put(render_line(text, urg))
+        for item in assigned.get(name, []):
+            put(person_line(item, name))
+        if mentioned.get(name):
+            put()
+            put("_mentioned in_")
+            for item in mentioned[name]:
+                put(person_line(item, name))
         put()
 
     return out
 
 
-def ensure_tail(tail, nl):
-    for raw in tail:
-        if COMPLETED_RE.match(bare(raw)):
-            return tail
-    return [nl, "## Completed (History)" + nl, nl] + list(tail)
+DONE_HEADER = "# Completed"
+DONE_NOTE = ("_Appended by TodoSync, newest first. Not part of the wiki: nothing here "
+             "is indexed and nothing derives from it. It is kept because a `- [x]` "
+             "line may be pruned from its note, and then this is the only record._")
 
 
-def append_completed(tail, entries, nl):
-    """Newest first, directly under the Completed heading."""
+def append_done(overview, entries):
+    """Add completed todos to the work log, under a `## YYYY-MM` heading.
+
+    Months descend and rows within a month descend, so the file reads newest
+    first throughout and the current month is always the first thing under the
+    header. Appending never rewrites a row that is already there -- this is the
+    one file in the system that is not re-derived from the notes."""
     if not entries:
-        return tail
-    tail = list(ensure_tail(tail, nl))
-    at = len(tail)
-    for i, raw in enumerate(tail):
-        if COMPLETED_RE.match(bare(raw)):
+        return False
+
+    path = done_path(overview)
+    try:
+        lines = read_lines(path) if os.path.exists(path) else []
+    except Exception as e:
+        log("ERROR reading work log: {}".format(e))
+        return False
+
+    nl = eol(lines)
+    if not lines:
+        lines = [DONE_HEADER + nl, nl, DONE_NOTE + nl, nl]
+
+    stamp = today()
+    new = []
+    for entry in entries:
+        line = "- [x] {}{}".format("! " if entry.get("urgent") else "", entry["text"])
+        if entry.get("source"):
+            line += " [[{}]]".format(entry["source"])
+        new.append(line + " <!-- resolved: {} -->".format(stamp) + nl)
+
+    heading = "## {}".format(month(stamp))
+    at = None
+    for i, raw in enumerate(lines):
+        found = MONTH_RE.match(bare(raw))
+        if not found:
+            continue
+        if found.group(1) == month(stamp):
             at = i + 1
-            if at < len(tail) and bare(tail[at]).strip() == "":
+            if at < len(lines) and not bare(lines[at]).strip():
                 at += 1
-            else:
-                tail.insert(i + 1, nl)
-                at = i + 2
+            break
+        if found.group(1) < month(stamp):
+            # The first older month: this one belongs directly above it.
+            lines[i:i] = [heading + nl, nl] + new + [nl]
+            at = -1
             break
 
-    new = []
-    for e in entries:
-        line = "- [x] {}{}".format("! " if e.get("urgent") else "", e["text"])
-        if e.get("source"):
-            line += " [[{}]]".format(e["source"])
-        line += " <!-- resolved: {} -->".format(today())
-        new.append(line + nl)
-    tail[at:at] = new
-    return tail
+    if at is None:
+        # No month is older, so either the log is empty of months or every one
+        # of them is newer -- in both cases this month goes at the end.
+        while lines and not bare(lines[-1]).strip():
+            lines.pop()
+        lines.extend([nl, heading + nl, nl] + new)
+    elif at >= 0:
+        lines[at:at] = new
+
+    try:
+        write_lines(path, lines)
+    except Exception as e:
+        log("ERROR writing work log: {}".format(e))
+        return False
+    log("work log: {} appended under {}".format(len(new), heading))
+    return True
 
 
-def render(window, overview, cache, completed=()):
+def render(window, overview, cache):
     try:
         lines = read_lines(overview) if os.path.exists(overview) else []
     except Exception as e:
@@ -494,7 +645,7 @@ def render(window, overview, cache, completed=()):
     nl = eol(lines)
     capture, _old_generated, tail = split_zones(lines)
     capture = list(capture)
-    tail = list(append_completed(tail, completed, nl))
+    tail = list(tail)
 
     # The blank lines around the markers are emitted here, so they have to be
     # stripped off the zones that are carried through -- otherwise every render
@@ -504,10 +655,11 @@ def render(window, overview, cache, completed=()):
     while tail and not bare(tail[0]).strip():
         tail.pop(0)
     if not capture:
-        capture = ["# Capture" + nl]
+        capture = ["# Aggregate" + nl, nl, "## Inline capture" + nl]
 
     out = capture + [nl, BEGIN_MARK + nl, nl]
-    out.extend(build_generated(collect(cache, overview), nl))
+    persons, me = people_index(cache)
+    out.extend(build_generated(collect(cache, overview), nl, persons, me))
     out.append(END_MARK + nl)
     out.append(nl)
     out.extend(tail)
@@ -602,14 +754,19 @@ def edit_source(path, row, text, check=None, urgent=None):
 
 def read_generated(overview):
     """Every checkbox line in the generated zone, as
-    (checked, text, urgent, source). Under '# By File' the enclosing heading
-    supplies the source, since those lines carry no wiki link."""
+    (checked, text, urgent, source, person).
+
+    Every generated row now carries its source as a trailing wiki link, so the
+    source is never inferred from an enclosing heading -- which is what used to
+    truncate a todo whose own text ended in a link. Under '# By Person' the
+    '## name' heading is still remembered, because a row there may have had its
+    leading [[name]]: slot dropped and needs it back before it can be matched."""
     lines = read_lines(overview)
     _capture, generated, _tail = split_zones(lines)
 
     found = []
-    in_by_file = False
-    group = None
+    in_by_person = False
+    person = None
 
     for raw in generated:
         line = bare(raw)
@@ -617,10 +774,10 @@ def read_generated(overview):
         if h:
             title = h.group(2)
             if len(h.group(1)) == 1:
-                in_by_file = title.lower().startswith("by file")
-                group = None
-            elif in_by_file:
-                group = title
+                in_by_person = title.lower().startswith("by person")
+                person = None
+            elif in_by_person:
+                person = title
             continue
 
         m = LINE_RE.match(line)
@@ -633,7 +790,8 @@ def read_generated(overview):
             urgent, text = True, um.group(1).strip()
         if not text:
             continue
-        found.append((m.group(1) != " ", text, urgent, m.group(3) or group))
+        found.append((m.group(1) != " ", text, urgent, m.group(3),
+                      person if in_by_person else None))
     return found
 
 
@@ -650,21 +808,50 @@ def apply_overview_edits(window):
         return
 
     resolved, retitled, missed = [], 0, 0
-    seen = set()
+    unmatched = set()
 
-    for checked, text, urgent, source in edits:
-        if (text, source) in seen:
-            continue
-        seen.add((text, source))
+    # One todo is listed several times over -- under Urgent, under Inbox and
+    # under its person -- so the rows are gathered per source line before any
+    # of them is acted on. Keyed on the line rather than on the text, because
+    # the By Person row may have had its leading [[person]]: slot dropped and
+    # is therefore not string-identical to the other two.
+    order, groups = [], {}
 
+    for checked, text, urgent, source, person in edits:
         found = locate(cache, source, text)
+        if not found and person:
+            # Put the dropped slot back before giving up. It has to be the
+            # note's own text that goes on from here: edit_source rewrites the
+            # line with whatever it is handed, so a stripped text reaching it
+            # would erase the slot from the note.
+            restored = "[[{}]]: {}".format(person, text)
+            again = locate(cache, source, restored)
+            if again:
+                found, text = again, restored
         if not found:
-            if checked:
+            if checked and (text, source) not in unmatched:
+                unmatched.add((text, source))
                 missed += 1
             continue
-        path, row = found
 
-        if checked:
+        path, row = found
+        k = (key(path), row)
+        if k not in groups:
+            order.append(k)
+            groups[k] = {"path": path, "row": row, "rows": []}
+        groups[k]["rows"].append((checked, text, urgent))
+
+    for k in order:
+        group = groups[k]
+        path, row = group["path"], group["row"]
+
+        # A tick wins wherever it was made. Without this the first row read
+        # decides, so ticking a box in By Person -- the last section, and the
+        # one actually used -- would be overruled by the untouched copy of the
+        # same todo sitting further up in Inbox.
+        tick = next((r for r in group["rows"] if r[0]), None)
+        if tick:
+            _c, text, urgent = tick
             if edit_source(path, row, text, check=True):
                 resolved.append({"text": text, "urgent": urgent,
                                  "source": display_name(path)})
@@ -672,16 +859,21 @@ def apply_overview_edits(window):
                 missed += 1
             continue
 
+        # Same rule for the ! toggle: the row that disagrees with the note is
+        # the one the user just edited.
+        text = group["rows"][0][1]
         was = next((e.get("urgent", False)
                     for e in cache["files"][key(path)]["unchecked"]
                     if e["text"] == text), False)
-        if was != urgent and edit_source(path, row, text, urgent=urgent):
+        flip = next((r for r in group["rows"] if r[2] != was), None)
+        if flip and edit_source(path, row, flip[1], urgent=flip[2]):
             retitled += 1
 
     cache, completed, aborted = sweep(window, overview)
     if aborted:
         return
-    if render(window, overview, cache, resolved + completed):
+    append_done(overview, resolved + completed)
+    if render(window, overview, cache):
         refresh_view(window, overview)
 
     parts = []
@@ -702,7 +894,8 @@ def sync(window, force=False, extra=None):
     if aborted:
         window.status_message("TodoSync: symbol index looks cold; overview left alone")
         return
-    if render(window, overview, cache, completed):
+    append_done(overview, completed)
+    if render(window, overview, cache):
         refresh_view(window, overview)
 
 
