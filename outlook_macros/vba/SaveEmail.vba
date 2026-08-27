@@ -210,6 +210,14 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
 
     ' End YAML block then blank line
     resultString = resultString & "---" & vbCrLf & vbCrLf
+    ' Row of that blank line, for the 'subl file:row:col' spec below, so the
+    ' caret lands after the frontmatter instead of at the top of the file.
+    ' It has to be counted rather than known: the frontmatter's length varies
+    ' with the recipient and attachment lists. The last Split element is the
+    ' body line not yet written, so UBound is the blank line and UBound + 1
+    ' would be the first line of the body.
+    Dim bodyRow As Long
+    bodyRow = UBound(Split(resultString, vbCrLf))
     ' Add a Markdown task before the email body
     ' Add original email content
     resultString = resultString & ConvertLinksToMarkdown(oMail.Body)
@@ -259,7 +267,13 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
     ' Open the saved markdown file in Sublime Text instead of Obsidian.
     ' Requires the 'subl' command line tool to be available in PATH.
     ' We pass the full file path as a quoted parameter (ShellExecute handles argument string separately).
-    ShellExecute 0, "open", "subl", """" & targetVaultPath & fileName & """", vbNullString, 1
+    ' The ':row:col' position spec goes INSIDE the quotes: subl parses the
+    ' trailing colon groups off the end, so the drive letter's colon is safe.
+    ' CStr rather than bare '&' concatenation only to be explicit that no
+    ' leading space (Str$'s) is wanted. Both are 1-based; the BOM SaveAsUTF8
+    ' writes shifts neither.
+    ShellExecute 0, "open", "subl", _
+        """" & targetVaultPath & fileName & ":" & CStr(bodyRow) & ":1" & """", vbNullString, 1
 
 
     Next
@@ -394,6 +408,9 @@ Private Sub ExtractMeetingCore()
         resultString = resultString & "  - store_id: " & GetStoreID(oAppt) & vbCrLf
 
         resultString = resultString & "---" & vbCrLf & vbCrLf
+        ' Caret row for subl; see the note in ExtractEmailCore.
+        Dim bodyRow As Long
+        bodyRow = UBound(Split(resultString, vbCrLf))
 
         ' Body
         resultString = resultString & ConvertLinksToMarkdown(oAppt.Body)
@@ -411,8 +428,9 @@ Private Sub ExtractMeetingCore()
         ' Save
         SaveAsUTF8 vaultPathToSaveFileTo & fileName, resultString
 
-        ' Open in Sublime Text
-        ShellExecute 0, "open", "subl", """" & vaultPathToSaveFileTo & fileName & """", vbNullString, 1
+        ' Open in Sublime Text, caret after the frontmatter
+        ShellExecute 0, "open", "subl", _
+            """" & vaultPathToSaveFileTo & fileName & ":" & CStr(bodyRow) & ":1" & """", vbNullString, 1
 
     Next
 
@@ -714,6 +732,9 @@ Sub SendAndSaveEmail()
     resultString = resultString & "  - conversation_id: " & conversationId & vbCrLf
 
     resultString = resultString & "---" & vbCrLf & vbCrLf
+    ' Caret row for subl; see the note in ExtractEmailCore.
+    Dim bodyRow As Long
+    bodyRow = UBound(Split(resultString, vbCrLf))
     resultString = resultString & ConvertLinksToMarkdown(oMail.Body)
 
     ' --- filename: <prefix><yyyy-MM-dd>_<HHNN> @<first recipient> - <subject>.md ---
@@ -746,7 +767,8 @@ Sub SendAndSaveEmail()
 
     ' Open the saved markdown file in Sublime Text (same as ExtractEmail).
     ' Requires the 'subl' command line tool to be available in PATH.
-    ShellExecute 0, "open", "subl", """" & vaultPathToSaveFileTo & fileName & """", vbNullString, 1
+    ShellExecute 0, "open", "subl", _
+        """" & vaultPathToSaveFileTo & fileName & ":" & CStr(bodyRow) & ":1" & """", vbNullString, 1
 
     Exit Sub
 EndCleanSend:
