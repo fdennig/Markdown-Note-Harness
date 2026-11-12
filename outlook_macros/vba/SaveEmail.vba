@@ -58,8 +58,6 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
     End If
 
     '================================================'
-    ' Save as plain text
-    Const OLTXT = 0
     ' Object holding variable
     Dim obj As Object
     ' Instantiate an Outlook Email Object
@@ -70,7 +68,9 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
     ' NOTE: selecting a conversation-view stack wont work
     '       you'll need to select one of the emails
     Dim fileName As String
-    Dim temporarySubjectLineString As String
+    Dim resultString As String
+    Dim bodyRow As Long
+    Dim attPrefix As String
     Dim currentExplorer As Explorer
         Set currentExplorer = Application.ActiveExplorer
     Dim Selection As Selection
@@ -85,6 +85,80 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
           MsgBox "This code only works with Emails."
           GoTo EndClean: ' you broke it
         End If
+
+        ' The note itself -- frontmatter, body and filename -- comes from
+        ' BuildEmailNote, which ExtractEmailsBatch shares, so a note exported
+        ' one at a time and a note exported in a batch cannot drift apart.
+        resultString = BuildEmailNote(oMail, toReply, saveAttachments, isPersonal, priority, _
+            personNameStartChar, emailFileNameStartChr, fileName, bodyRow, attPrefix)
+
+    ' Save the result
+    SaveAsUTF8 targetVaultPath & fileName, resultString
+
+    ' Save attachments to disk if requested
+    If saveAttachments And oMail.Attachments.Count > 0 Then
+        Dim attPath As String
+        attPath = attachmentPath
+        Dim attItem As Attachment
+        For Each attItem In oMail.Attachments
+            attItem.SaveAsFile attPath & attPrefix & attItem.fileName
+        Next attItem
+    End If
+
+    ' Open the saved markdown file in Sublime Text instead of Obsidian.
+    ' Requires the 'subl' command line tool to be available in PATH.
+    ' We pass the full file path as a quoted parameter (ShellExecute handles argument string separately).
+    ' The ':row:col' position spec goes INSIDE the quotes: subl parses the
+    ' trailing colon groups off the end, so the drive letter's colon is safe.
+    ' CStr rather than bare '&' concatenation only to be explicit that no
+    ' leading space (Str$'s) is wanted. Both are 1-based; the BOM SaveAsUTF8
+    ' writes shifts neither.
+    ShellExecute 0, "open", "subl", _
+        """" & targetVaultPath & fileName & ":" & CStr(bodyRow) & ":1" & """", vbNullString, 1
+
+
+    Next
+
+    ' Normal completion. Jumping over the handler is what lets it report an
+    ' error without false alarms: reaching the label below can then only mean
+    ' something failed. Testing Err.Number there would not work -- the
+    ' 'On Error Resume Next' regions above leave Err set on a successful run,
+    ' and neither Resume Next nor a later 'On Error GoTo' clears it.
+    Set obj = Nothing
+    Set oMail = Nothing
+    Exit Sub
+
+EndClean:
+    ' This used to be silent, which made every failure indistinguishable from
+    ' the macro not being wired up at all -- no note, no message, nothing to
+    ' search for. SendAndSaveEmail has always reported; this now matches it.
+    MsgBox "ExtractEmail failed: " & Err.Description & _
+           " (error " & Err.Number & ")" & vbCrLf & vbCrLf & _
+           "No note was written. The file is saved only after the whole " & _
+           "frontmatter is built, so there is no half-written note to clean up.", _
+           vbExclamation, "ExtractEmail"
+    Set obj = Nothing
+    Set oMail = Nothing
+End Sub
+
+'---------------------------------------------------------------------------'
+' One email as a note: returns the text, and hands back the filename, the row
+' of the blank line under the frontmatter, and the attachment prefix.
+'
+' Shared by ExtractEmailCore (the selection, one note at a time, straight into
+' the vault) and ExtractEmailsBatch (a date range, into a staging folder). It
+' writes nothing and opens nothing; that is the caller's business.
+'
+' It has NO error handler of its own, on purpose: a failure here surfaces in
+' the caller's handler, so ExtractEmailCore still reports through EndClean and
+' the batch still counts the item as failed and moves on.
+'---------------------------------------------------------------------------'
+Private Function BuildEmailNote(oMail As Outlook.MailItem, toReply As Boolean, saveAttachments As Boolean, _
+        isPersonal As Boolean, priority As String, personNameStartChar As String, _
+        emailFileNameStartChr As String, ByRef fileName As String, ByRef bodyRow As Long, _
+        ByRef attPrefix As String) As String
+
+        Dim temporarySubjectLineString As String
 
         ' Keep the subject twice over: the raw one goes into the note, the
         ' cleaned one into the filename. These used to be a single string, so
@@ -169,7 +243,6 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
         resultString = resultString & "tags:" & vbCrLf
         ' Attachments list inside front matter
         Dim att As Attachment, attName As String
-        Dim attPrefix As String
         attPrefix = IIf(saveAttachments, Format(dtDate, "yyyy-MM-dd_HHNN") & "_", "")
         If oMail.Attachments.Count > 0 Then
             resultString = resultString & "attachments:" & vbCrLf
@@ -216,18 +289,12 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
     ' with the recipient and attachment lists. The last Split element is the
     ' body line not yet written, so UBound is the blank line and UBound + 1
     ' would be the first line of the body.
-    Dim bodyRow As Long
     bodyRow = UBound(Split(resultString, vbCrLf))
     ' Add a Markdown task before the email body
     ' Add original email content
     resultString = resultString & ConvertLinksToMarkdown(oMail.Body)
 
 
-        ' Make a dummy email to hold the details we're saving
-        ' This way we dont get junk in the message header when saving
-        Dim outputItem As MailItem
-            Set outputItem = Application.CreateItem(olMailItem)
-        outputItem.Body = resultString
 
         ' Build improved filename for fuzzy search:
         ' Format: <prefix><yyyy-MM-dd>_<HHNN> @Sender - Subject.md
@@ -237,7 +304,7 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
         Dim senderToken As String: senderToken = sender
         On Error Resume Next
         ReplaceCharsForFileName senderToken, " "
-        On Error GoTo EndClean
+        On Error GoTo 0
         senderToken = Replace(senderToken, "_", " ")
         senderToken = CompressWhitespace(Trim$(senderToken))
     ' Ensure exactly one leading @ before sender name in filename
@@ -251,56 +318,8 @@ Private Sub ExtractEmailCore(toReply As Boolean, saveAttachments As Boolean, Opt
         End If
     fileName = emailFileNameStartChr & dateToken & "_" & timeToken & " @" & senderToken & " - " & subjectForFile & ".md"
 
-    ' Save the result
-    SaveAsUTF8 targetVaultPath & fileName, resultString
-
-    ' Save attachments to disk if requested
-    If saveAttachments And oMail.Attachments.Count > 0 Then
-        Dim attPath As String
-        attPath = attachmentPath
-        Dim attItem As Attachment
-        For Each attItem In oMail.Attachments
-            attItem.SaveAsFile attPath & attPrefix & attItem.fileName
-        Next attItem
-    End If
-
-    ' Open the saved markdown file in Sublime Text instead of Obsidian.
-    ' Requires the 'subl' command line tool to be available in PATH.
-    ' We pass the full file path as a quoted parameter (ShellExecute handles argument string separately).
-    ' The ':row:col' position spec goes INSIDE the quotes: subl parses the
-    ' trailing colon groups off the end, so the drive letter's colon is safe.
-    ' CStr rather than bare '&' concatenation only to be explicit that no
-    ' leading space (Str$'s) is wanted. Both are 1-based; the BOM SaveAsUTF8
-    ' writes shifts neither.
-    ShellExecute 0, "open", "subl", _
-        """" & targetVaultPath & fileName & ":" & CStr(bodyRow) & ":1" & """", vbNullString, 1
-
-
-    Next
-
-    ' Normal completion. Jumping over the handler is what lets it report an
-    ' error without false alarms: reaching the label below can then only mean
-    ' something failed. Testing Err.Number there would not work -- the
-    ' 'On Error Resume Next' regions above leave Err set on a successful run,
-    ' and neither Resume Next nor a later 'On Error GoTo' clears it.
-    Set obj = Nothing
-    Set oMail = Nothing
-    Set outputItem = Nothing
-    Exit Sub
-
-EndClean:
-    ' This used to be silent, which made every failure indistinguishable from
-    ' the macro not being wired up at all -- no note, no message, nothing to
-    ' search for. SendAndSaveEmail has always reported; this now matches it.
-    MsgBox "ExtractEmail failed: " & Err.Description & _
-           " (error " & Err.Number & ")" & vbCrLf & vbCrLf & _
-           "No note was written. The file is saved only after the whole " & _
-           "frontmatter is built, so there is no half-written note to clean up.", _
-           vbExclamation, "ExtractEmail"
-    Set obj = Nothing
-    Set oMail = Nothing
-    Set outputItem = Nothing
-End Sub
+    BuildEmailNote = resultString
+End Function
 
 Private Sub ExtractMeetingCore()
 
@@ -800,5 +819,358 @@ Private Function GetCurrentUserSmtp() As String
 Fail:
     GetCurrentUserSmtp = ""
 End Function
+
+'======================================================================================='
+' BATCH EXPORT
+'  ExtractEmailsBatch writes EVERY email received or sent in a date range to a staging
+'  folder OUTSIDE the vault and hands that folder to Sublime, where EmailBatch.py drops
+'  what is already filed, proposes a wiki link for the rest, and lets you accept, replace
+'  or discard each one. Only an email you accept there is ever written into the vault.
+'
+'  The notes are built by BuildEmailNote -- the same code ExtractEmail runs -- so a note
+'  that arrives through a batch is indistinguishable from one exported by hand.
+'
+'  The range prompt takes:
+'      7                          the last 7 days
+'      2026-11-01                 from that day until now
+'      2026-11-01 14:30           from that minute until now
+'      2026-11-01..2026-11-07     between two days, both included
+'  and offers the end of the previous batch as its default, so pressing Enter means
+'  "everything since last time". An overlap costs nothing: the plugin drops what is
+'  already in the vault and what you discarded before.
+'
+'  Settings (staging folder, senders to skip, which folders) are in batchConfig in
+'  USER_CONFIG.
+'======================================================================================='
+Sub ExtractEmailsBatch()
+
+    Dim vaultPathToSaveFileTo As String
+    Dim personNameStartChar As String
+    Dim emailFileNameStartChr As String
+    config vaultPathToSaveFileTo, personNameStartChar, emailFileNameStartChr
+
+    Dim stagingRoot As String
+    Dim skipSenders As String
+    Dim includeInboxSubfolders As Boolean
+    Dim includeSentItems As Boolean
+    Dim defaultDaysBack As Long
+    batchConfig stagingRoot, skipSenders, includeInboxSubfolders, includeSentItems, defaultDaysBack
+
+    On Error GoTo EndCleanBatch
+
+    ' --- the range -------------------------------------------------------------
+    Dim suggestion As String
+    suggestion = ReadLastBatchEnd(stagingRoot)
+    If Len(suggestion) = 0 Then suggestion = Format(Date - defaultDaysBack, "yyyy-mm-dd")
+
+    Dim answer As String
+    answer = InputBox("Export every email received or sent since:" & vbCrLf & vbCrLf & _
+        "    7" & vbTab & vbTab & vbTab & "the last 7 days" & vbCrLf & _
+        "    2026-11-01" & vbTab & vbTab & "from that day until now" & vbCrLf & _
+        "    2026-11-01 14:30" & vbTab & "from that minute until now" & vbCrLf & _
+        "    2026-11-01..2026-11-07" & vbTab & "both days included", _
+        "ExtractEmailsBatch", suggestion)
+    If Len(Trim$(answer)) = 0 Then Exit Sub        ' Cancel, or an emptied box
+
+    Dim fromDate As Date
+    Dim toDate As Date
+    If Not ParseBatchRange(answer, fromDate, toDate) Then
+        MsgBox "Could not read '" & answer & "' as a range." & vbCrLf & vbCrLf & _
+               "Use a number of days, yyyy-mm-dd, yyyy-mm-dd hh:mm, or " & _
+               "yyyy-mm-dd..yyyy-mm-dd.", vbExclamation, "ExtractEmailsBatch"
+        Exit Sub
+    End If
+
+    ' --- the staging folder ----------------------------------------------------
+    ' One folder per run, named for the moment it started, under a root that is
+    ' NOT in OneDrive and NOT in the vault: a week of mail is a few hundred
+    ' throwaway files, and inside the vault they would be synced, indexed by
+    ' Sublime and offered as link targets before you had kept a single one.
+    Dim batchPath As String
+    batchPath = stagingRoot & Format(Now, "yyyymmdd_hhnnss") & "\"
+    EnsureFolder batchPath
+
+    ' --- the export ------------------------------------------------------------
+    Dim nSaved As Long
+    Dim nSkipped As Long
+    Dim nFailed As Long
+    Dim ns As Outlook.NameSpace
+    Set ns = Application.GetNamespace("MAPI")
+
+    BatchFolder ns.GetDefaultFolder(olFolderInbox), includeInboxSubfolders, "ReceivedTime", _
+        fromDate, toDate, skipSenders, batchPath, personNameStartChar, emailFileNameStartChr, _
+        nSaved, nSkipped, nFailed
+    If includeSentItems Then
+        BatchFolder ns.GetDefaultFolder(olFolderSentMail), False, "SentOn", _
+            fromDate, toDate, skipSenders, batchPath, personNameStartChar, emailFileNameStartChr, _
+            nSaved, nSkipped, nFailed
+    End If
+
+    If nSaved = 0 Then
+        RemoveFolderIfEmpty batchPath
+        MsgBox "No emails to export between " & Format(fromDate, "yyyy-mm-dd hh:nn") & _
+               " and " & Format(toDate, "yyyy-mm-dd hh:nn") & "." & vbCrLf & vbCrLf & _
+               nSkipped & " skipped by the sender filter, " & nFailed & " could not be read.", _
+               vbInformation, "ExtractEmailsBatch"
+        Set ns = Nothing
+        Exit Sub
+    End If
+
+    ' Where the next batch starts by default. Never later than now, so a range
+    ' that ends in the future does not skip mail that has yet to arrive.
+    WriteLastBatchEnd stagingRoot, IIf(toDate > Now, Now, toDate)
+
+    ' --- hand over to Sublime ---------------------------------------------------
+    ' subl --command "email_batch_prepare {\"dir\": \"C:/.../20261112_101500/\"}"
+    ' Forward slashes on purpose: the path travels inside a JSON string inside a
+    ' quoted argument, and a backslash would need escaping at both levels. If
+    ' Sublime is not running this starts it, and the command may then arrive
+    ' before the plugins have loaded -- "Email batch: Review" in the command
+    ' palette picks the same folder up, so nothing is lost either way.
+    ShellExecute 0, "open", "subl", _
+        "--command ""email_batch_prepare {\""dir\"": \""" & Replace(batchPath, "\", "/") & "\""}""", _
+        vbNullString, 1
+
+    ' Silent on success: Sublime's status bar reports the counts. A failure is
+    ' worth a click, because a mail that could not be exported is a mail that
+    ' will never be offered for review.
+    If nFailed > 0 Then
+        MsgBox nSaved & " emails exported; " & nFailed & " could not be read and were left out " & _
+               "(encrypted mail, or a subject that makes an invalid filename)." & vbCrLf & vbCrLf & _
+               "Export those one at a time with ExtractEmail to see the error.", _
+               vbExclamation, "ExtractEmailsBatch"
+    End If
+
+    ' Normal completion; see ExtractEmailCore for why the handler is jumped over.
+    Set ns = Nothing
+    Exit Sub
+
+EndCleanBatch:
+    MsgBox "ExtractEmailsBatch failed: " & Err.Description & " (error " & Err.Number & ")" & _
+           vbCrLf & vbCrLf & "Whatever was exported before the failure is in" & vbCrLf & _
+           batchPath & vbCrLf & "and 'Email batch: Review' in Sublime will pick it up.", _
+           vbExclamation, "ExtractEmailsBatch"
+    Set ns = Nothing
+End Sub
+
+' Every mail item in one folder that falls inside the range, and optionally in
+' its subfolders. The Restrict filter is deliberately coarse (see below); the
+' exact test is made per item in BatchOne.
+Private Sub BatchFolder(fld As Outlook.Folder, recurse As Boolean, dateField As String, _
+        fromDate As Date, toDate As Date, skipSenders As String, batchPath As String, _
+        personNameStartChar As String, emailFileNameStartChr As String, _
+        ByRef nSaved As Long, ByRef nSkipped As Long, ByRef nFailed As Long)
+
+    ' A Jet date literal has to be in the machine's own short-date format and may
+    ' not carry seconds -- 'ddddd h:nn AMPM' is the documented way to write one.
+    ' Because seconds are dropped, the upper bound is pushed out by a minute and
+    ' BatchOne makes the precise comparison.
+    Dim flt As String
+    flt = "[" & dateField & "] >= '" & Format(fromDate, "ddddd h:nn AMPM") & "'" & _
+          " AND [" & dateField & "] <= '" & Format(toDate + TimeSerial(0, 1, 0), "ddddd h:nn AMPM") & "'"
+
+    Dim found As Outlook.Items
+    Set found = fld.Items.Restrict(flt)
+
+    Dim itm As Object
+    Dim oMail As Outlook.MailItem
+    For Each itm In found
+        ' 43 = olMail. Meeting requests (53), read receipts and delivery reports
+        ' (46) share the Inbox and are none of them correspondence.
+        If itm.Class = 43 Then
+            Set oMail = itm
+            Select Case BatchOne(oMail, fromDate, toDate, skipSenders, batchPath, _
+                                 personNameStartChar, emailFileNameStartChr)
+                Case 1: nSaved = nSaved + 1
+                Case 0: nSkipped = nSkipped + 1
+                Case Else: nFailed = nFailed + 1
+            End Select
+        End If
+        DoEvents        ' keep Outlook's window alive through a long range
+    Next
+
+    If recurse Then
+        Dim subFld As Outlook.Folder
+        For Each subFld In fld.Folders
+            BatchFolder subFld, True, dateField, fromDate, toDate, skipSenders, batchPath, _
+                personNameStartChar, emailFileNameStartChr, nSaved, nSkipped, nFailed
+        Next
+    End If
+End Sub
+
+' One mail item into the staging folder. 1 = written, 0 = deliberately skipped,
+' -1 = failed. It has its own handler so that one unreadable item -- encrypted
+' mail is the usual one -- costs that item and not the batch.
+Private Function BatchOne(oMail As Outlook.MailItem, fromDate As Date, toDate As Date, _
+        skipSenders As String, batchPath As String, personNameStartChar As String, _
+        emailFileNameStartChr As String) As Long
+
+    On Error GoTo Fail
+
+    Dim stamp As Date
+    stamp = oMail.ReceivedTime
+    If stamp < fromDate Or stamp >= toDate Then
+        BatchOne = 0
+        Exit Function
+    End If
+    ' Out-of-office replies and other rule-generated mail: IPM.Note.Rules.*
+    If LCase$(oMail.MessageClass) Like "ipm.note.rules.*" Then
+        BatchOne = 0
+        Exit Function
+    End If
+    If IsSkippedSender(GetSenderSmtp(oMail), skipSenders) Then
+        BatchOne = 0
+        Exit Function
+    End If
+
+    ' No flags and no attachments: to-reply, priority and personal are set in
+    ' Sublime during review, and an attachment worth keeping is still one
+    ' ExtractEmailWithAttachments away, by F12 from the note.
+    Dim fileName As String
+    Dim bodyRow As Long
+    Dim attPrefix As String
+    Dim noteText As String
+    noteText = BuildEmailNote(oMail, False, False, False, "", personNameStartChar, _
+        emailFileNameStartChr, fileName, bodyRow, attPrefix)
+
+    SaveAsUTF8 batchPath & UniqueStagedName(batchPath, fileName), noteText
+    BatchOne = 1
+    Exit Function
+Fail:
+    BatchOne = -1
+End Function
+
+' True when the sender's address contains any of the ';'-separated fragments.
+Private Function IsSkippedSender(ByVal addr As String, ByVal skipSenders As String) As Boolean
+    Dim parts() As String
+    Dim i As Long
+    Dim fragment As String
+    If Len(addr) = 0 Or Len(skipSenders) = 0 Then Exit Function
+    addr = LCase$(addr)
+    parts = Split(LCase$(skipSenders), ";")
+    For i = LBound(parts) To UBound(parts)
+        fragment = Trim$(parts(i))
+        If Len(fragment) > 0 Then
+            If InStr(addr, fragment) > 0 Then
+                IsSkippedSender = True
+                Exit Function
+            End If
+        End If
+    Next
+End Function
+
+' Two mails from one sender in one minute with one subject would otherwise
+' overwrite each other: SaveAsUTF8 saves with adSaveCreateOverWrite.
+' FileSystemObject rather than Dir$, which cannot see a name holding characters
+' outside the ANSI code page -- an en dash in a subject is enough.
+Private Function UniqueStagedName(batchPath As String, fileName As String) As String
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim stem As String
+    Dim n As Long
+    stem = Left$(fileName, Len(fileName) - 3)       ' without ".md"
+    UniqueStagedName = fileName
+    n = 1
+    Do While fso.FileExists(batchPath & UniqueStagedName)
+        n = n + 1
+        UniqueStagedName = stem & " (" & n & ").md"
+    Loop
+    Set fso = Nothing
+End Function
+
+' "7", "2026-11-01", "2026-11-01 14:30" or "2026-11-01..2026-11-07" into a
+' half-open range [fromDate, toDate). False when it is none of those.
+Private Function ParseBatchRange(ByVal s As String, ByRef fromDate As Date, ByRef toDate As Date) As Boolean
+    Dim parts() As String
+    s = Trim$(s)
+    toDate = Now
+    If Len(s) >= 1 And Len(s) <= 3 And Not (s Like "*[!0-9]*") Then
+        fromDate = Date - CLng(s)
+        ParseBatchRange = True
+        Exit Function
+    End If
+    If InStr(s, "..") > 0 Then
+        parts = Split(s, "..")
+        If UBound(parts) <> 1 Then Exit Function
+        If Not ParseStamp(Trim$(parts(0)), fromDate, False) Then Exit Function
+        If Not ParseStamp(Trim$(parts(1)), toDate, True) Then Exit Function
+    Else
+        If Not ParseStamp(s, fromDate, False) Then Exit Function
+    End If
+    ParseBatchRange = (fromDate < toDate)
+End Function
+
+' yyyy-mm-dd, optionally followed by " hh:mm". Read by position and never by
+' CDate, whose reading of 2026-11-01 depends on the machine's regional settings.
+' A bare END day is included whole, i.e. it runs to the following midnight.
+Private Function ParseStamp(ByVal s As String, ByRef d As Date, endOfDay As Boolean) As Boolean
+    On Error GoTo Fail
+    If Not (s Like "####-##-##*") Then Exit Function
+    d = DateSerial(CInt(Mid$(s, 1, 4)), CInt(Mid$(s, 6, 2)), CInt(Mid$(s, 9, 2)))
+    If Len(s) > 10 Then
+        If Not (Mid$(s, 11) Like " ##:##") Then Exit Function
+        d = d + TimeSerial(CInt(Mid$(s, 12, 2)), CInt(Mid$(s, 15, 2)), 0)
+    ElseIf endOfDay Then
+        d = d + 1
+    End If
+    ParseStamp = True
+    Exit Function
+Fail:
+    ParseStamp = False
+End Function
+
+' The end of the previous batch as "yyyy-mm-dd hh:mm", or "" when there has not
+' been one. It is the range prompt's default, nothing more: deleting the file
+' only means the next prompt suggests defaultDaysBack again.
+Private Function ReadLastBatchEnd(stagingRoot As String) As String
+    On Error GoTo Fail
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim path As String
+    path = stagingRoot & "last_batch_end.txt"
+    If fso.FileExists(path) Then
+        Dim line As String
+        line = Trim$(fso.OpenTextFile(path, 1).ReadLine)
+        If line Like "####-##-## ##:##" Then ReadLastBatchEnd = line
+    End If
+    Exit Function
+Fail:
+    ReadLastBatchEnd = ""
+End Function
+
+Private Sub WriteLastBatchEnd(stagingRoot As String, ByVal stamp As Date)
+    On Error Resume Next        ' a default that fails to save is not worth a dialog
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim ts As Object
+    Set ts = fso.CreateTextFile(stagingRoot & "last_batch_end.txt", True)
+    ts.WriteLine Format(stamp, "yyyy-mm-dd hh:nn")
+    ts.Close
+End Sub
+
+' mkdir -p. FileSystemObject.CreateFolder makes one level at a time.
+Private Sub EnsureFolder(ByVal path As String)
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim parts() As String
+    Dim i As Long
+    Dim cur As String
+    If Right$(path, 1) = "\" Then path = Left$(path, Len(path) - 1)
+    parts = Split(path, "\")
+    cur = parts(0)                                  ' the drive, "C:"
+    For i = 1 To UBound(parts)
+        cur = cur & "\" & parts(i)
+        If Not fso.FolderExists(cur) Then fso.CreateFolder cur
+    Next
+    Set fso = Nothing
+End Sub
+
+Private Sub RemoveFolderIfEmpty(ByVal path As String)
+    On Error Resume Next
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Right$(path, 1) = "\" Then path = Left$(path, Len(path) - 1)
+    If fso.GetFolder(path).Files.Count = 0 Then fso.DeleteFolder path
+End Sub
 
 

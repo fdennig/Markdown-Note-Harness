@@ -27,6 +27,8 @@ map.
 | `Hygiene.py` | Runs `<vault>/scripts/hygiene.py` once a day and keeps `hygiene: review DUE · triage DUE` in every status bar while a sweep is owed |
 | `Hygiene.sublime-settings` | The interpreter it runs (uv's `python3.14.exe`) and how often it looks |
 | `Reminders.py` | `open_reminders_due`, which the vault's SessionStart hook calls to open the due reminders in the window holding the vault |
+| `EmailBatch.py` | Reviews a batch the `ExtractEmailsBatch` macro staged: one panel per email with the proposed link first, a sweep for everything no hub was found for, undo throughout. Only what you accept is written into the vault |
+| `EmailBatch.sublime-settings` | The staging folder, the interpreter, and whether the background agent is asked. Override it in `Packages/User/` |
 | `outlook_bridge.ps1` | PowerShell COM bridge to Outlook Classic. Inert to Sublime; reached only via `subprocess` from `francis.py` |
 | `MarkdownExtended.sublime-syntax` | Adds a scope for unchecked todos, for colour and the per-file symbol list |
 | `YAMLEmailFrontmatter.sublime-syntax` | Adds scopes for the email frontmatter fields the macro writes |
@@ -35,7 +37,7 @@ map.
 | `Reference List - Wiki In Symbols.tmPreferences.disabled` | Inert. The one-minute experiment that would index wiki links inside headings and todos too |
 | `MarkdownExtended.sublime-settings` | Hands `shift+f12` to `wiki_backlinks`, using MarkdownEditing's own disable switch |
 | `outlook_macros/` | The VBA that produces the email notes, imported by `git subtree`. Runs in Outlook, not in Sublime |
-| `tests/` | Four headless suites — `test_todosync.py`, `test_wikiresolve.py`, `test_wikilinks.py`, `test_markers.py`. Run by hand; nothing runs them for you |
+| `tests/` | Five headless suites — `test_todosync.py`, `test_wikiresolve.py`, `test_wikilinks.py`, `test_markers.py`, `test_emailbatch.py`. Run by hand; nothing runs them for you |
 | `wiki_page_FOR_MARKDOWN_EDITING.txt` | A patched copy of MarkdownEditing's `wiki_page.py` — see below |
 
 ## How the pieces fit
@@ -95,6 +97,13 @@ All are in the command palette; the ones with a keybinding say so.
 The reply / reply-all / forward variants are built — `outlook_mail_action` takes
 `action` — but **commented out** in `francis.sublime-commands` and unbound. Scope
 cannot tell them apart, so each would need a key of its own.
+
+**Email batch**
+
+- *Email batch: Review* — work through what Outlook's `ExtractEmailsBatch` staged,
+  or resume a review paused with `Esc`. The macro starts it by itself; the palette
+  entry is for resuming, and for when Sublime was not running. See
+  [The email batch](#the-email-batch) below.
 
 **Todos**
 
@@ -450,15 +459,101 @@ Two details worth knowing, because both look like bugs otherwise:
 `entry_id`, and their date is a send time the stored copy does not share. A note
 whose message has genuinely been archived or deleted reports and stops.
 
+## The email batch
+
+Exporting one email at a time means finding it in Outlook, running the macro,
+waiting for the note to open and resolve, and typing its link. The batch does the
+same thing for a date range at once, and moves the choosing into Sublime.
+
+```mermaid
+flowchart LR
+    OL["Outlook<br/>ExtractEmailsBatch"]
+    ST["staging folder<br/>%LOCALAPPDATA%, not the vault"]
+    PL["propose_links.py<br/>prepare · agent"]
+    RV["EmailBatch.py<br/>one panel per email"]
+    VA["vault/emails/<br/>with its [[link]]"]
+
+    OL -->|every mail in the range| ST
+    ST --> PL -->|proposals.json| RV
+    RV -->|only what you accept| VA
+    RV -.->|discard| X["left out"]
+```
+
+1. **In Outlook, run `ExtractEmailsBatch`.** It asks for a range and offers the end
+   of the previous batch, so `Enter` means *everything since last time*. It also
+   takes a number of days, a date, or `2026-11-01..2026-11-07`. Inbox (with
+   subfolders) and Sent Items are read; meeting requests, receipts, out-of-office
+   replies and `no-reply` senders are left out.
+2. **Sublime comes forward** and reports, for example, `212 staged: 148 to review,
+   31 with a proposal, 52 already filed, 12 from muted senders`. What is already
+   in the vault, what you discarded in an earlier batch and what comes from a muted
+   sender is never shown.
+3. **One panel per email**, with the note previewed behind it:
+
+   | you do | it does |
+   |---|---|
+   | `enter` | files the email under the first row — the proposed link |
+   | type a few letters, `enter` | files it under that note instead; every hub is in the list |
+   | *More than one link…* | pick several, then *File under [[a]] [[b]]* |
+   | *File with no link* | files it as it is |
+   | *Discard* | leaves it out |
+   | *Discard all N from …* / *the rest of this thread* | the same, for every pending email from that sender or in that conversation |
+   | *Discard and mute …* | discards them and never stages that sender again |
+   | *Flag: to reply / high priority / personal* | toggles the frontmatter flag before filing |
+   | *Undo: …* | takes back the last decision, as far back as the batch goes |
+   | `esc` | pauses; *Email batch: Review* resumes |
+
+   A link you accept is carried to the rest of its thread: the next email in the
+   same conversation offers it first.
+4. **The sweep.** Everything no hub was found for comes as one list sorted by
+   sender. `up` + `enter` discards them all; selecting an email pulls it out to be
+   filed instead. Only discards get a bulk path — a wrong discard leaves an email
+   unfiled, which is what happens to most mail anyway, while a wrong accept puts a
+   false link in the graph.
+5. **Clear the batch.** Until then nothing is deleted and everything can be undone.
+
+Where a proposal comes from is shown beside it:
+
+| | | right, measured on the vault's own history |
+|---|---|---|
+| `thread` | another email in the conversation is already linked | 89% |
+| `subject` | same subject, `RE:`/`FW:` stripped | 83% |
+| `agent` | a headless `claude -p` read the top of the email | not yet measured — `decisions.jsonl` is recording it |
+| `sender` | where this correspondent's mail has gone | 38% first; on the shortlist of three about two times in three |
+
+The agent runs in the background while you are already reviewing, and is asked
+only about emails the first two could not settle. It has no tools, is sent the
+hub list and the first 1,500 characters of each body, and can answer only with
+hub names. `"agent": false` in `EmailBatch.sublime-settings` turns it off; the
+rest works without it, with more left to the sweep.
+
+Three files sit beside the batch folders in `%LOCALAPPDATA%\MarkdownNoteHarness\emailBatch`:
+`decisions.jsonl` (every accept, discard and undo, with what was proposed),
+`muted_senders.txt` (one address per line; delete a line to unmute) and
+`last_batch_end.txt` (the range prompt's default).
+
+**To install the macro:** re-import `outlook_macros/vba/SaveEmail.vba` and
+`USER_CONFIG.vba` in Outlook's VBE (`Alt+F11`), and put `ExtractEmailsBatch` on the
+ribbon or Quick Access Toolbar. `ExtractEmailCore` was split so that both routes
+build a note with the same code, so export one email by hand afterwards to confirm
+the single-email macros still behave.
+
 ## Tests
 
 ```
 "%USERPROFILE%\.local\bin\python3.14.exe" tests/test_todosync.py
 "%USERPROFILE%\.local\bin\python3.14.exe" tests/test_wikiresolve.py
 "%USERPROFILE%\.local\bin\python3.14.exe" tests/test_wikilinks.py
+"%USERPROFILE%\.local\bin\python3.14.exe" tests/test_emailbatch.py
 ```
 
-All three stub `sublime` and `sublime_plugin` and build a throwaway vault in a
+`test_emailbatch.py` drives a whole review through a stub window whose quick panel
+records its rows and lets the test press one: accept, replace, several links,
+flags, the bulk discards, mute, undo, the sweep, waiting on the agent, clearing.
+The proposals themselves are tested in the vault, in
+`<vault>/scripts/tests/test_propose_links.py`.
+
+All of them stub `sublime` and `sublime_plugin` and build a throwaway vault in a
 temp directory, so none of them needs the editor. They must stay in `tests/` —
 Sublime only auto-loads plugins from the package root, and a file that assigns a
 fake into `sys.modules["sublime"]` would break every plugin in the process if it

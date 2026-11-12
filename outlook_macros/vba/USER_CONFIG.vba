@@ -80,6 +80,34 @@ Public Sub config(vaultPathToSaveFileTo As String, personNameStartChar As String
     meetingTypeLink = "[[&]]"
     trainingTypeLink = "[[!]]"
     contactTypeLink = "[[@]]"
-    
+
+End Sub
+
+' Settings for ExtractEmailsBatch only. Kept apart from config so that sub's
+' already long optional signature does not grow again.
+Public Sub batchConfig(stagingRoot As String, skipSenders As String, includeInboxSubfolders As Boolean, includeSentItems As Boolean, defaultDaysBack As Long)
+
+    '================================================'
+    ' Where a batch is staged before review: one folder per run underneath this.
+    ' It must stay OUTSIDE the vault and outside OneDrive -- these are throwaway
+    ' files, and inside the vault they would be synced and indexed before you had
+    ' kept one. The Sublime side reads the same place from "staging_root" in
+    ' EmailBatch.sublime-settings; change one and you must change the other.
+    ' !IMPORTANT! make sure you have a trailing backslash at the end of the path `\`
+    stagingRoot = Environ$("LOCALAPPDATA") & "\MarkdownNoteHarness\emailBatch\"
+    '================================================'
+    ' Mail from these senders is never exported. Fragments separated by ';', each
+    ' matched anywhere in the sender's address, case-insensitively.
+    skipSenders = "no-reply;noreply;no_reply;donotreply;do-not-reply;mailer-daemon;postmaster@"
+    '================================================'
+    ' The Inbox is always read. Its subfolders too?
+    includeInboxSubfolders = True
+    ' Sent Items too? Your own mail is as much part of a thread as the replies.
+    includeSentItems = True
+    '================================================'
+    ' What the range prompt suggests the very first time, before there has been a
+    ' batch to continue from.
+    defaultDaysBack = 7
+
 End Sub
 

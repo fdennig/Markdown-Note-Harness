@@ -1,0 +1,40 @@
+{
+    // The email batch review: "Email batch: Review", or what Outlook's
+    // ExtractEmailsBatch macro hands over. See EmailBatch.py.
+    //
+    // Edit your copy in Packages/User/EmailBatch.sublime-settings rather than
+    // this file. (Preferences > Browse Packages, then User/.)
+
+    // Interpreter for <vault>/scripts/propose_links.py -- the uv-installed
+    // CPython the vault's other scripts use. "~" and %VARS% are expanded.
+    "python": "~/.local/bin/python3.14.exe",
+
+    // Where the macro stages a batch: one folder per run underneath this.
+    // It is deliberately outside the vault and outside OneDrive. The macro's
+    // side of this is stagingRoot in batchConfig (outlook_macros/vba/
+    // USER_CONFIG.vba); change one and you must change the other.
+    "staging_root": "%LOCALAPPDATA%/MarkdownNoteHarness/emailBatch",
+
+    // Where an accepted email is written, relative to the vault root.
+    "emails_dir": "emails",
+
+    // Ask a headless `claude -p` about the emails thread history could not
+    // settle. It runs in the background while you review, is sent the hub list
+    // and the top of each email body, has no tools, and can only answer with
+    // hub names. Mail from senders whose filed notes are mostly personal: true
+    // is never sent. false turns it off entirely: proposals then come from
+    // thread, subject and sender history alone, and everything else goes to
+    // the sweep.
+    "agent": true,
+
+    // Passed to `claude --model`. Classification against a list does not need
+    // the largest model, and a batch is a few hundred emails.
+    "agent_model": "sonnet",
+
+    // Full path to claude.exe. Empty = PATH, then ~/.local/bin/claude.exe.
+    "claude": "",
+
+    // Seconds before `prepare` is abandoned. A normal run is two to five; the
+    // first after a restart can take minutes while OneDrive hydrates the vault.
+    "prepare_timeout": 600
+}

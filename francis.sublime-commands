@@ -68,6 +68,15 @@
       "args": { "symbol": "toreply_note", "label": "to-reply", "pick": false }
     },
     {
+      // Review the oldest staged batch from Outlook's ExtractEmailsBatch, or
+      // resume one paused with Esc. One panel per email: enter accepts the
+      // proposed link, typing picks another, and every decision can be undone
+      // until the batch is cleared. The macro starts this by itself; the
+      // palette entry is for resuming, and for when Sublime was not running.
+      "caption": "Email batch: Review",
+      "command": "email_batch_review"
+    },
+    {
       "caption": "Email: Open original in Outlook",
       "command": "outlook_mail_action",
       "args": { "action": "open" }
