@@ -23,6 +23,10 @@ map.
 | `WikiResolve.sublime-settings` | Where the vault core and the person notes are. Override it in `Packages/User/` |
 | `WikiLinks.py` | Backlinks, rename-with-backlinks, and the note picker on `tab` — all three answered from the symbol index instead of by reading the vault |
 | `WikiLinks.sublime-settings` | Which classes the note picker offers, and which of them wait for a `/filter`. Override it in `Packages/User/` |
+| `Markers.py` | Dated `- [>]` / `- [?]` / `- [-]` lines: Enter continues a marker, `.` + `tab` opens a `- [>]`, `alt+z` toggles `[?]` ↔ `[-]`. Enter is bound in `Packages/User/`, since MarkdownEditing's would win here |
+| `Hygiene.py` | Runs `<vault>/scripts/hygiene.py` once a day and keeps `hygiene: review DUE · triage DUE` in every status bar while a sweep is owed |
+| `Hygiene.sublime-settings` | The interpreter it runs (uv's `python3.14.exe`) and how often it looks |
+| `Reminders.py` | `open_reminders_due`, which the vault's SessionStart hook calls to open the due reminders in the window holding the vault |
 | `outlook_bridge.ps1` | PowerShell COM bridge to Outlook Classic. Inert to Sublime; reached only via `subprocess` from `francis.py` |
 | `MarkdownExtended.sublime-syntax` | Adds a scope for unchecked todos, for colour and the per-file symbol list |
 | `YAMLEmailFrontmatter.sublime-syntax` | Adds scopes for the email frontmatter fields the macro writes |
@@ -31,7 +35,7 @@ map.
 | `Reference List - Wiki In Symbols.tmPreferences.disabled` | Inert. The one-minute experiment that would index wiki links inside headings and todos too |
 | `MarkdownExtended.sublime-settings` | Hands `shift+f12` to `wiki_backlinks`, using MarkdownEditing's own disable switch |
 | `outlook_macros/` | The VBA that produces the email notes, imported by `git subtree`. Runs in Outlook, not in Sublime |
-| `tests/` | Three headless suites — `test_todosync.py`, `test_wikiresolve.py`, `test_wikilinks.py`. Run by hand; nothing runs them for you |
+| `tests/` | Four headless suites — `test_todosync.py`, `test_wikiresolve.py`, `test_wikilinks.py`, `test_markers.py`. Run by hand; nothing runs them for you |
 | `wiki_page_FOR_MARKDOWN_EDITING.txt` | A patched copy of MarkdownEditing's `wiki_page.py` — see below |
 
 ## How the pieces fit

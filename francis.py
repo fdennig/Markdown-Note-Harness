@@ -528,6 +528,31 @@ def restore_preview_folds(keep_view=None):
     _PREVIEW_FOLDS.clear()
 
 # ---------------------------
+# Copy the full path of the file in view -- ctrl+shift+c
+# ---------------------------
+class CopyPathToClipboardCommand(sublime_plugin.TextCommand):
+    """Put the view's full path on the clipboard; `with_line` appends ':<row>'.
+
+    Moved here 20261112 from a loose Packages/User/copy_path_to_clipboard.py
+    that the new machine's User folder no longer carried. That version always
+    appended the caret's line; the palette entry keeps that as an option.
+    """
+
+    def run(self, edit, with_line=False):
+        path = self.view.file_name()
+        if not path:
+            sublime.status_message("Copy path: this view has no file on disk")
+            return
+        if with_line:
+            row, _ = self.view.rowcol(self.view.sel()[0].begin())
+            path = "{0}:{1}".format(path, row + 1)
+        sublime.set_clipboard(path)
+        sublime.status_message("Copied " + path)
+
+    def is_enabled(self, with_line=False):
+        return bool(self.view.file_name())
+
+# ---------------------------
 # Command 1: Open Markdown link
 # ---------------------------
 class OpenLinkedFileCommand(sublime_plugin.TextCommand):

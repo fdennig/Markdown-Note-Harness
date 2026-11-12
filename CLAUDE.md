@@ -10,9 +10,16 @@ A Sublime Text 4 package (lives in `Packages/Markdown-Note-Harness/`) that exten
 
 ## Architecture
 
-**Three Python plugin modules, loaded automatically by Sublime Text:**
+**Three small vault-channel modules**, rebuilt 20261112 from the vault's CLAUDE.md after the originals (never pushed) were lost with the old machine — each file's docstring is its reference:
 
-- `francis.py` — Seven `sublime_plugin` commands, plus shared frontmatter helpers (`parse_frontmatter`, `frontmatter_field`, `read_frontmatter`, `outlook_refs`):
+- `Markers.py` — `marker_newline`, `marker_open_directive`, `marker_toggle_dismiss`: the dated `- [>]` / `- [?]` / `- [-]` lines `scripts/questions.py` parses. The Enter binding lives in `Packages/User/Default.sublime-keymap` because MarkdownEditing loads after this package and its bullet Enter would win.
+- `Hygiene.py` — runs `<vault>/scripts/hygiene.py` once per day (and on *Hygiene: Check now*) and holds a per-view status item while anything is DUE; re-applied on `on_activated`, which is what makes a per-view status persistent.
+- `Reminders.py` — `open_reminders_due`, an ApplicationCommand because `subl --command` lands in whichever window is active; it finds the window holding the vault.
+
+**And the original plugin modules:**
+
+- `francis.py` — Eight `sublime_plugin` commands, plus shared frontmatter helpers (`parse_frontmatter`, `frontmatter_field`, `read_frontmatter`, `outlook_refs`):
+  - `CopyPathToClipboardCommand` (TextCommand) — copies the view's full path, `with_line` appending `:<row>`. Bound to `ctrl+shift+c`. Moved here 20261112 from a loose `Packages/User/copy_path_to_clipboard.py` that did not survive the machine change.
   - `OpenLinkedFileCommand` (TextCommand) — opens the URL or file path from a Markdown link `[text](path)` under the caret. Bound to F12 in markdown link scope. The target is read off the **scope map** (`markup.underline.link`, which the syntax puts on the target of an inline link and nothing else), not re-parsed out of the text: a bare target may contain balanced parentheses and the syntax tracks them (`link-url-unquoted-parens`), so scanning for the first `)` after the caret truncates every SharePoint link whose folder is named like `0A Initiative wide documents (workplan,concept,governance)` — as does a `)` in the *description*. Truncation is worse than an error, because a truncated `https://` URL still opens, silently, at the wrong address. The `<…>` form is the only one that may carry spaces, and its `<`/`>` are punctuation, outside the scoped target — but the quotes in the `<"C:\path\file.docx">` form the Outlook export writes are not, hence `clean`. Note `open_file`'s URL test is a *domain-shaped* regex ending in `\S+$`: a target with unencoded spaces, or any non-http scheme (`mailto:`, `file:///`, `onenote:`), fails it and falls through to being joined to the note's folder.
   - `OpenFrontmatterAttachmentCommand` (TextCommand) — opens attachment files referenced in YAML frontmatter (prepends `./attachments/`). Bound to F12 in `entity.name.attachment.yaml` scope.
   - `ConvertToMarkdownCommand` (WindowCommand) — converts .docx/.pptx/.pdf to Markdown using Pandoc or marker-pdf. Hardcoded tool paths point to `C:\portablePrograms\`.

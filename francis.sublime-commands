@@ -135,5 +135,38 @@
       // while any affected file has unsaved changes.
       "caption": "Wiki: Rename note and backlinks",
       "command": "wiki_rename_note"
+    },
+    {
+      // Also on ctrl+shift+c.
+      "caption": "File: Copy full path",
+      "command": "copy_path_to_clipboard"
+    },
+    {
+      "caption": "File: Copy full path with line number",
+      "command": "copy_path_to_clipboard",
+      "args": { "with_line": true }
+    },
+    {
+      // Run <vault>/scripts/hygiene.py now rather than at the daily tick, and
+      // refresh the status-bar item from it.
+      "caption": "Hygiene: Check now",
+      "command": "hygiene_check"
+    },
+    {
+      // The same run with --all: every hub carrying unreviewed leaves, due or
+      // not, in an output panel.
+      "caption": "Hygiene: Show full picture",
+      "command": "hygiene_show"
+    },
+    {
+      // Toggle "- [?]" <-> "- [-]" on the caret lines. Also on alt+z.
+      "caption": "Markers: Dismiss / restore question",
+      "command": "marker_toggle_dismiss"
+    },
+    {
+      // Re-open %LOCALAPPDATA%\ClaudeLogs\remindersDue.md, as the SessionStart
+      // hook does on a day with reminders due.
+      "caption": "Reminders: Show due",
+      "command": "open_reminders_due"
     }
 ]

@@ -1,4 +1,9 @@
 [
+    { // Copy the full path of the file in view (francis.py). Unbound in Sublime's
+      // defaults and in every installed package, so no context is needed.
+        "keys": ["ctrl+shift+c"],
+        "command": "copy_path_to_clipboard"
+    },
     { // Open in Sublime Merge
         "keys": ["super+alt+z"],
         "command": "sublime_merge_open_repo"
@@ -147,5 +152,29 @@
         [
             { "key": "selector", "operator": "equal", "operand": "text.html.markdown - (meta.link | markup.underline.link | variable), meta.link.reference.wiki.description.markdown", "match_all": true }
         ]
+    },
+    { // Markers.py: "." then tab on an otherwise empty line opens a dated
+      // "- [>] YYYYMMDD — ", the user's instruction to the agent.
+      //
+      // No clash with MarkdownEditing's five tab bindings: four need a bullet
+      // or heading underline before the caret and the fifth a non-empty
+      // selection, and a lone "." is neither. Enter on a marker line is
+      // bound in Packages/User/Default.sublime-keymap instead -- see
+      // Markers.py for why.
+        "keys": ["tab"], "command": "marker_open_directive", "context":
+        [
+            { "key": "selector", "operator": "equal", "operand": "text.html.markdown - meta.frontmatter - markup.raw", "match_all": true },
+            { "key": "selection_empty", "operator": "equal", "operand": true, "match_all": true },
+            { "key": "preceding_text", "operator": "regex_match", "operand": "^\\s*\\.$", "match_all": true },
+            { "key": "following_text", "operator": "regex_match", "operand": "^\\s*$", "match_all": true },
+            { "key": "auto_complete_visible", "operator": "equal", "operand": false }
+        ]
+    },
+    { // Markers.py: dismiss a "- [?]" as "- [-]", or undo that. Never "- [x]",
+      // which TodoSync would copy into the work log.
+        "keys": ["alt+z"], "command": "marker_toggle_dismiss", "context":
+        [
+            { "key": "selector", "operator": "equal", "operand": "text.html.markdown", "match_all": true }
+        ]
     }
-]  
+]

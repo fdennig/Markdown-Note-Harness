@@ -1,0 +1,12 @@
+{
+    // Interpreter for <vault>/scripts/hygiene.py -- the uv-installed CPython
+    // the vault's hooks use. "~" and %VARS% are expanded.
+    "python": "~/.local/bin/python3.14.exe",
+
+    // How often to look whether the date has changed. The script itself runs
+    // at most once per calendar day unless asked (Hygiene: Check now).
+    "check_every_minutes": 60,
+
+    // Seconds before a run is abandoned. A normal run is ~3s.
+    "timeout": 120
+}
