@@ -58,9 +58,15 @@ Commands:
   email_batch_review                 "Email batch: Review" -- start, or resume
                                      a paused review (Esc pauses)
 
-Nothing here runs on load, on save or on a timer. Both commands are things
-you invoke, which is the shape batch work is supposed to have in this package
-(see CLAUDE.md on why the corpus pass left WikiResolve).
+Nothing here runs on save or on a timer, and one thing runs on load:
+`plugin_loaded` picks up a batch the macro staged in the last few minutes that
+has not been through `prepare`. That is the macro's own request arriving late,
+not a sweep. When Sublime is not running, `subl --command` starts it and the
+command is delivered before any plugin exists to receive it -- the first live
+batch, 20261114, was dropped exactly that way: 76 notes staged, Sublime in
+front, and nothing else. Only a fresh AND unprepared batch qualifies, so an
+ordinary start, a plugin reload or a review you paused never opens a panel by
+itself; those wait for "Email batch: Review".
 
 Python 3.3 plugin host: no f-strings, no pathlib; ValueError rather than
 json.JSONDecodeError.
@@ -901,6 +907,51 @@ def begin(window, vault, batch, data):
 
         threading.Thread(target=work).start()
     session.advance()
+
+
+# A batch older than this was not staged by the macro run that just started
+# Sublime, so it is left for the palette command.
+HANDOFF_WINDOW_SECONDS = 600
+# Sublime restores its windows and their folders after plugins load; the vault
+# may not be findable on the first look.
+HANDOFF_FIRST_MS = 3000
+HANDOFF_RETRY_MS = 3000
+HANDOFF_TRIES = 6
+
+
+def fresh_unprepared_batch(root, now=None):
+    """The batch a just-run macro is waiting on, or None.
+
+    Unprepared (no proposals.json) and created within HANDOFF_WINDOW_SECONDS.
+    The age comes from the folder's own name, which the macro stamps, rather
+    than from an mtime that OneDrive or a virus scanner may have touched.
+    """
+    batch, data = next_batch(root)
+    if not batch or data is not None:
+        return None
+    try:
+        made = time.mktime(time.strptime(os.path.basename(batch)[:15],
+                                         "%Y%m%d_%H%M%S"))
+    except ValueError:
+        return None
+    age = (now if now is not None else time.time()) - made
+    return batch if -60 <= age <= HANDOFF_WINDOW_SECONDS else None
+
+
+def pick_up_handoff(tries=HANDOFF_TRIES):
+    if _session or _busy["prepare"]:
+        return                      # the command did arrive after all
+    batch = fresh_unprepared_batch(staging_root())
+    if not batch:
+        return
+    if not find_vault()[0] and tries > 1:
+        sublime.set_timeout(lambda: pick_up_handoff(tries - 1), HANDOFF_RETRY_MS)
+        return
+    start(batch)
+
+
+def plugin_loaded():
+    sublime.set_timeout(pick_up_handoff, HANDOFF_FIRST_MS)
 
 
 class EmailBatchPrepareCommand(sublime_plugin.ApplicationCommand):

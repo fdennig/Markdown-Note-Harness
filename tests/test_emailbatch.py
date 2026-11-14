@@ -468,6 +468,44 @@ check("a batch with nothing pending is not offered", eb.next_batch(ROOT) == (Non
 check("and is what clear_finished removes", eb.clear_finished(ROOT) == [other]
       and not os.path.exists(other) and os.path.isfile(os.path.join(ROOT, eb.DECISIONS)))
 
+print("\ncold start: the macro's command arrived before the plugin did")
+import time  # noqa: E402
+
+NOW = time.mktime(time.strptime("20261114_100800", "%Y%m%d_%H%M%S"))
+fresh = os.path.join(ROOT, "20261114_100739")
+os.makedirs(fresh)
+io.open(os.path.join(fresh, "a.md"), "w").close()
+check("a batch staged seconds ago and never prepared is the hand-off",
+      eb.fresh_unprepared_batch(ROOT, NOW) == fresh)
+check("the same batch an hour later waits for the palette command",
+      eb.fresh_unprepared_batch(ROOT, NOW + 3600) is None)
+with io.open(os.path.join(fresh, eb.PROPOSALS), "w", encoding="utf-8") as f:
+    json.dump({"order": ["a.md"], "notes": {"a.md": {"status": "new"}}}, f)
+check("a prepared batch -- a paused review -- is never picked up on load",
+      eb.fresh_unprepared_batch(ROOT, NOW) is None)
+os.remove(os.path.join(fresh, eb.PROPOSALS))
+
+started = []
+real_start, real_time, real_folders = eb.start, time.time, Window.folders
+eb.start = lambda batch=None, window=None: started.append(batch)
+eb._session = None
+time.time = lambda: NOW
+Window.folders = lambda self: []            # windows not restored yet
+del TIMERS[:]
+eb.plugin_loaded()
+run_timers(2)
+check("with no vault window yet it waits rather than giving up", started == [] and TIMERS)
+Window.folders = real_folders
+run_timers(2)
+check("and starts the batch once the vault is there", started == [fresh], started)
+del started[:]
+eb._busy["prepare"] = True
+eb.pick_up_handoff()
+check("it stands down if the command did arrive and prepare is running", started == [])
+eb._busy["prepare"] = False
+eb.start, time.time = real_start, real_time
+shutil.rmtree(fresh)
+
 print("\n" + ("ALL PASS" if not FAILS else "FAILURES: " + ", ".join(FAILS)))
 shutil.rmtree(TMP, ignore_errors=True)
 sys.exit(1 if FAILS else 0)
