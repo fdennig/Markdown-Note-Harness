@@ -16,7 +16,10 @@ The Sublime third of the email batch workflow:
      when that row is a hub. The proposals are the first rows, so Enter alone
      accepts a good one; every hub is listed underneath, so typing a few
      letters finds another. The list opens on activities; "/all" widens it
-     to every hub and person. ctrl+d discards the email in hand.
+     to every hub and person. ctrl+d discards the email in hand. LEFT and
+     RIGHT step to the neighbouring pending email without deciding anything;
+     every email keeps its number, and a decision carries on from where you
+     are rather than from the top.
 
 **An email reaches the vault only when you accept it here.** Accepting writes
 the staged note into `<vault>/emails/` under the macro's own filename, with
@@ -358,6 +361,9 @@ def panel_item(trigger, details="", annotation="", item_kind=None):
     cls = getattr(sublime, "QuickPanelItem", None)
     if cls is None:             # only under the test stubs
         return [trigger, details or annotation]
+    # A quick panel renders `details` as minihtml, and these are hub titles
+    # and email subjects: "R&D <draft>" must not be read as markup.
+    details = (details or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return cls(trigger, details, annotation,
                item_kind or getattr(sublime, "KIND_AMBIGUOUS", (0, "", "")))
 
@@ -384,6 +390,12 @@ class Session(object):
         self.vault = data["vault"]
         self.left = pending_files(batch, data)
         self.total = len(self.left)
+        # Each email's fixed place in the batch, 0-based, and where you are.
+        # A decision never renumbers anything: email 10 stays email 10 whether
+        # or not 8 and 9 have been dealt with.
+        self.place = dict((fn, i) for i, fn in enumerate(self.left))
+        self.pos = 0
+        self.drafts = {}            # fn -> links and flags added, not yet filed
         self.agent = {}
         self.agent_stamp = None
         self.agent_running = False
@@ -441,7 +453,12 @@ class Session(object):
     def advance(self):
         self.load_agent()
         waiting = False
-        for fn in self.left:
+        # From the current place onwards first, then round to what was
+        # stepped over -- so dispatching email 10 leads to 11, and 8 and 9
+        # come back once the end has been reached.
+        ahead = [fn for fn in self.left if self.place[fn] >= self.pos]
+        behind = [fn for fn in self.left if self.place[fn] < self.pos]
+        for fn in ahead + behind:
             where = self.kind_of(fn)
             if where == "item":
                 return self.show_item(fn)
@@ -502,11 +519,15 @@ class Session(object):
         file under (flags, /activity, Remove) Enter does what Tab does.
         """
         note = self.notes[fn]
-        if not keep or not self.item or self.item["fn"] != fn:
-            self.item = {"fn": fn, "links": [], "only": DEFAULT_FILTER,
-                         "flags": {"personal": bool(note.get("personal_hint"))}}
+        item = self.drafts.get(fn)
+        if item is None:
+            item = self.drafts[fn] = {
+                "fn": fn, "links": [], "only": DEFAULT_FILTER,
+                "flags": {"personal": bool(note.get("personal_hint"))}}
+        if self.item is not item:
             self.preview(fn)
-        item = self.item
+        self.item = item
+        self.pos = self.place[fn]
         rows = []
         actions = []
 
@@ -549,11 +570,12 @@ class Session(object):
         if len(by_sender) > 1:
             add("discard", by_sender, u"Discard all {0} from {1}".format(
                 len(by_sender), note.get("from") or note.get("from_email")),
-                item_kind=KIND_DISCARD)
+                details=self.subjects(by_sender, fn), item_kind=KIND_DISCARD)
         by_thread = self.same(fn, "thread")
         if len(by_thread) > 1:
             add("discard", by_thread, u"Discard the rest of this thread ({0})".format(
-                len(by_thread)), item_kind=KIND_DISCARD)
+                len(by_thread)), details=self.subjects(by_thread, fn),
+                item_kind=KIND_DISCARD)
         if note.get("from_email") and not note.get("sent"):
             add("mute", None, u"Discard and mute " + note["from_email"],
                 annotation="never staged again", item_kind=KIND_DISCARD)
@@ -585,10 +607,10 @@ class Session(object):
                 details=(hub.get("label") or "") if only else "",
                 annotation=hub["class"])
 
-        done = self.total - len(self.left) + 1
-        placeholder = u"{0}/{1} · {2} · {3} — {4}   [tab adds · enter files · {5} discards]".format(
-            done, self.total, note.get("date", ""), note.get("from", ""),
-            note.get("subject", ""), DISCARD_KEY_LABEL)
+        placeholder = (u"{0}/{1} · {2} · {3} — {4}   "
+                       u"[tab adds · enter files · {5} discards · ← → browse · {6} left]").format(
+            self.place[fn] + 1, self.total, note.get("date", ""), note.get("from", ""),
+            note.get("subject", ""), DISCARD_KEY_LABEL, len(self.left))
 
         def on_select(index):
             action, arg = actions[index]
@@ -627,6 +649,29 @@ class Session(object):
         else:
             return False
         return True
+
+    def subjects(self, fns, current):
+        """The other emails a bulk row would take, as one line of subjects."""
+        others = [self.notes[f].get("subject", "") for f in fns if f != current]
+        line = u" · ".join(others[:5])
+        return line + (u" · …" if len(others) > 5 else u"")
+
+    def step(self, delta):
+        """Left / right in the per-email panel: look at the neighbouring
+        pending email. Nothing is decided, and what was added to the email
+        being left stays with it."""
+        panel = self.panel
+        if not panel or panel["fn"] not in self.left:
+            return
+        target = self.left.index(panel["fn"]) + delta
+        if target < 0 or target >= len(self.left):
+            return say("that is the {0} email still pending".format(
+                "first" if delta < 0 else "last"))
+        fn = self.left[target]
+        self.dismissed = panel["token"]
+        self.panel = None
+        self.window.run_command("hide_overlay")
+        self.later(lambda: self.show_item(fn))
 
     def discard_key(self):
         """The discard shortcut in the per-email panel: this email, now."""
@@ -777,6 +822,7 @@ class Session(object):
         shutil.move(os.path.join(self.batch, fn), os.path.join(target, fn))
         if fn in self.left:
             self.left.remove(fn)
+        self.drafts.pop(fn, None)
 
     def unshelve(self, fn, folder):
         shutil.move(os.path.join(self.batch, folder, fn),
@@ -860,6 +906,7 @@ class Session(object):
             # Bring it straight back in front of you rather than wherever its
             # proposals would have queued it.
             self.rescued.add(fn)
+            self.pos = min(self.pos, self.place[fn])
         if entry["kind"] == "accept":
             try:
                 os.remove(entry["dest"])
@@ -1060,6 +1107,14 @@ class EmailBatchDiscardCommand(sublime_plugin.WindowCommand):
             _session.discard_key()
 
 
+class EmailBatchStepCommand(sublime_plugin.WindowCommand):
+    """Left / right while the per-email panel is open and nothing is typed."""
+
+    def run(self, delta=1):
+        if _session:
+            _session.step(int(delta))
+
+
 class EmailBatchContext(sublime_plugin.EventListener):
     """`email_batch_panel`: true only while a per-email panel is up.
 
@@ -1070,9 +1125,18 @@ class EmailBatchContext(sublime_plugin.EventListener):
     """
 
     def on_query_context(self, view, key, operator, operand, match_all):
-        if key != "email_batch_panel":
+        if key == "email_batch_input_empty":
+            # For the arrow keys, which must go on moving the caret once
+            # something has been typed into the panel's input line. `view` is
+            # that input line when it has focus; anything else is treated as
+            # empty, so the keys still work if Sublime hands over another view.
+            is_open = bool(_session and _session.panel) and not (
+                view is not None and view.settings().get("is_widget")
+                and view.size() > 0)
+        elif key == "email_batch_panel":
+            is_open = bool(_session and _session.panel)
+        else:
             return None
-        is_open = bool(_session and _session.panel)
         if operator == getattr(sublime, "OP_NOT_EQUAL", 1):
             return is_open != bool(operand)
         return is_open == bool(operand)

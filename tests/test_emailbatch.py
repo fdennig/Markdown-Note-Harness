@@ -526,6 +526,82 @@ check("'go on without it' sends the unread to the sweep",
       WINDOW.labels()[0] == "Discard all 1", WINDOW.labels())
 step(WINDOW.escape)
 
+print("\nleft and right: browse without deciding, positions fixed")
+shutil.rmtree(BATCH)
+os.makedirs(BATCH)
+ROWS3 = [stage("a", "Ann", "ann@x.org", "First", "CA", [("runTheThing", "thread")]),
+         stage("b", "Ann", "ann@x.org", "Second <b>&", "CB", [("runTheThing", "thread")]),
+         stage("c", "Ann", "ann@x.org", "Third", "CC", [("runTheThing", "thread")]),
+         stage("d", "Bob", "bob@x.org", "Fourth", "CD", [("buildTheOther", "thread")])]
+DATA3 = dict(DATA, order=[fn for fn, _ in ROWS3], notes=dict(ROWS3))
+s3 = eb.Session(WINDOW, BATCH, DATA3)
+eb._session = s3
+step(s3.advance)
+
+
+def arrow(delta):
+    step(lambda: eb.EmailBatchStepCommand(WINDOW).run(delta))
+
+
+class Input(object):
+    def __init__(self, text):
+        self.text = text
+
+    def settings(self):
+        return {"is_widget": True}
+
+    def size(self):
+        return len(self.text)
+
+
+def empty(view):
+    return eb.EmailBatchContext().on_query_context(view, "email_batch_input_empty", 0, True, False)
+
+
+check("the arrows navigate while nothing is typed", empty(Input("")) is True)
+check("and go back to moving the caret once something is", empty(Input("ken")) is False)
+check("the bulk row says what else it would take",
+      [r for r in WINDOW.rows if r[0] == "Discard all 3 from Ann"][0][1]
+      == u"Second <b>& \u00b7 Third", [r for r in WINDOW.rows if r[0].startswith("Discard all")])
+check("starts on the first email", WINDOW.placeholder.startswith(u"1/4"))
+step(lambda: WINDOW.tab("[[runTheThing]]"))
+said = len(MESSAGES)
+arrow(1)
+check("right shows the next email and decides nothing",
+      WINDOW.placeholder.startswith(u"2/4") and u"Second" in WINDOW.placeholder
+      and len(s3.left) == 4 and WINDOW.previews[-1].path.endswith("b.md"), WINDOW.placeholder)
+check("stepping was not read as a pause", not [m for m in MESSAGES[said:] if "paused" in m])
+arrow(1)
+check("right again: the third", WINDOW.placeholder.startswith(u"3/4"))
+step(lambda: WINDOW.callback(0))
+check("email 3 is dispatched while 1 and 2 are still pending",
+      sorted(os.listdir(MAIL)).count("c.md") == 1 and s3.left == ["a.md", "b.md", "d.md"])
+check("the review carries on from there, to email 4, with its own number",
+      WINDOW.placeholder.startswith(u"4/4") and u"3 left" in WINDOW.placeholder,
+      WINDOW.placeholder)
+arrow(1)
+check("right at the last pending email stays put and says so",
+      WINDOW.placeholder.startswith(u"4/4") and "last email still pending" in MESSAGES[-1])
+arrow(-1)
+check("left skips the gap the dispatched email left", WINDOW.placeholder.startswith(u"2/4"))
+arrow(-1)
+check("what was added to an email is still there on coming back",
+      WINDOW.placeholder.startswith(u"1/4")
+      and WINDOW.labels()[0] == "File under [[runTheThing]]", WINDOW.labels()[:2])
+arrow(-1)
+check("left at the first stays put", WINDOW.placeholder.startswith(u"1/4")
+      and "first email still pending" in MESSAGES[-1])
+arrow(1)
+arrow(1)
+step(lambda: eb.EmailBatchDiscardCommand(WINDOW).run())
+check("after the last one is decided it comes round to what was stepped over",
+      WINDOW.placeholder.startswith(u"1/4") and s3.left == ["a.md", "b.md"], WINDOW.placeholder)
+step(WINDOW.escape)
+shutil.rmtree(BATCH)
+os.makedirs(BATCH)
+io.open(os.path.join(BATCH, "w.md"), "w").close()   # an unprepared batch again
+eb._session = None
+
 print("\nclear_finished / next_batch")
 other = os.path.join(ROOT, "20261113_090000")
 os.makedirs(other)

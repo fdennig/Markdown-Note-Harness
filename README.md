@@ -498,7 +498,8 @@ flowchart LR
    | `/all` | the list under the proposals opens on **activities only**, each with its title, so you can arrow through what there is. `/all` widens it to every hub and person for the email in hand, and `/activity` narrows it again. A proposal is shown whatever its class |
    | *File with no link* | files it as it is |
    | `ctrl+d`, or *Discard* | leaves it out. The key works from any row |
-   | *Discard all N from …* / *the rest of this thread* | the same, for every pending email from that sender or in that conversation |
+   | `right` / `left` | shows the next / previous pending email without deciding anything, while nothing is typed in the panel (once something is, they move the text cursor). Every email keeps its number — `10/76` stays `10/76` — and after a decision the review carries on from where you are, coming back to what you stepped over once it reaches the end. Links and flags you added to an email stay with it while you look at others |
+   | *Discard all N from …* / *the rest of this thread* | the same, for every pending email from that sender or in that conversation; the row lists the other subjects it would take |
    | *Discard and mute …* | discards them and never stages that sender again |
    | *Flag: to reply / high priority / personal* | `tab` (or `enter`) toggles the frontmatter flag; it never files |
    | *Undo: …* | takes back the last decision, as far back as the batch goes |

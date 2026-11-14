@@ -214,5 +214,30 @@
             { "key": "overlay_visible", "operator": "equal", "operand": true },
             { "key": "email_batch_panel", "operator": "equal", "operand": true }
         ]
+    },
+    { // EmailBatch.py: right / left step to the next / previous pending email
+      // in the per-email panel WITHOUT deciding anything -- to see what else a
+      // sender or a thread holds before a bulk discard, or to deal with
+      // email 10 while 8 and 9 wait. Each email keeps its number.
+      //
+      // The third condition is what keeps these from being a nuisance: they
+      // are the caret keys of the panel's input line, so they navigate only
+      // while that line is EMPTY. Once a hub name is being typed, left and
+      // right edit it as they always have. "email_batch_input_empty" is
+      // answered by EmailBatch.py from the input line's own size.
+        "keys": ["right"], "command": "email_batch_step", "args": { "delta": 1 }, "context":
+        [
+            { "key": "overlay_visible", "operator": "equal", "operand": true },
+            { "key": "email_batch_panel", "operator": "equal", "operand": true },
+            { "key": "email_batch_input_empty", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["left"], "command": "email_batch_step", "args": { "delta": -1 }, "context":
+        [
+            { "key": "overlay_visible", "operator": "equal", "operand": true },
+            { "key": "email_batch_panel", "operator": "equal", "operand": true },
+            { "key": "email_batch_input_empty", "operator": "equal", "operand": true }
+        ]
     }
 ]
