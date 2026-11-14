@@ -176,5 +176,26 @@
         [
             { "key": "selector", "operator": "equal", "operand": "text.html.markdown", "match_all": true }
         ]
+    },
+    { // EmailBatch.py: tab in the per-email review panel ADDS the highlighted
+      // row -- a link, a flag, the /activity filter -- and keeps the panel
+      // open; enter is what files the email.
+      //
+      // A quick panel has no scope to select on, so the binding is gated on
+      // "email_batch_panel", a context EmailBatch.py answers true only while
+      // one of its per-email panels is up. That is what leaves tab alone in
+      // every other overlay: the command palette, Goto Anything, the wiki link
+      // picker above (which requires overlay_visible FALSE, so the two cannot
+      // both match), and EmailBatch's own sweep and wait panels.
+      //
+      // MarkdownEditing's five tab bindings all carry a markdown selector or a
+      // preceding_text test against the buffer; the overlay's input line is
+      // neither, so although MDE loads after this package it has nothing here
+      // to win.
+        "keys": ["tab"], "command": "email_batch_tab", "context":
+        [
+            { "key": "overlay_visible", "operator": "equal", "operand": true },
+            { "key": "email_batch_panel", "operator": "equal", "operand": true }
+        ]
     }
 ]

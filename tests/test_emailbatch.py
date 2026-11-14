@@ -123,6 +123,15 @@ class Window(object):
                 return
         raise AssertionError("no row starting {0!r} in {1}".format(text, self.labels()[:14]))
 
+    def tab(self, text):
+        """Highlight the first row starting with `text`, then press tab."""
+        for i, label in enumerate(self.labels()):
+            if label.startswith(text):
+                self.highlight(i)
+                eb.EmailBatchTabCommand(self).run()
+                return
+        raise AssertionError("no row starting {0!r} in {1}".format(text, self.labels()[:14]))
+
     def escape(self):
         self.callback(-1)
 
@@ -162,6 +171,7 @@ class _Command(object):
 
 sublime_plugin.ApplicationCommand = _Command
 sublime_plugin.WindowCommand = _Command
+sublime_plugin.EventListener = object
 sys.modules["sublime"] = sublime
 sys.modules["sublime_plugin"] = sublime_plugin
 sys.path.insert(0, PKG)
@@ -327,25 +337,65 @@ check("the decision log records what was proposed and what was chosen",
       log[-1]["action"] == "accept" and log[-1]["links"] == ["kenya"]
       and log[-1]["proposed"][0] == {"hub": "runTheThing", "tier": "thread"}, log[-1])
 
-print("\nseveral links, and flags")
+print("\ntab adds, enter files")
+
+
+def context():
+    return eb.EmailBatchContext().on_query_context(None, "email_batch_panel", 0, True, False)
+
+
 check("now on the subject-settled email", WINDOW.labels()[0] == "[[buildTheOther]]")
-step(lambda: WINDOW.press("More than one"))
-step(lambda: WINDOW.press("[[buildTheOther]]"))
-check("a picked link becomes a 'File under' row and nothing is filed yet",
-      WINDOW.labels()[0] == "File under [[buildTheOther]]"
-      and not os.path.exists(os.path.join(MAIL, "m1.md")), WINDOW.labels()[:2])
-step(lambda: WINDOW.press("kenya"))
-step(lambda: WINDOW.press("Flag: to reply"))
-check("toggling a flag keeps the email and the picks",
+check("the tab binding's context is true while a per-email panel is up", context() is True)
+check("and says nothing about any other key",
+      eb.EmailBatchContext().on_query_context(None, "selector", 0, True, False) is None)
+step(lambda: WINDOW.tab("[[buildTheOther]]"))
+check("tab adds the link, keeps the email and files nothing",
+      WINDOW.labels()[:2] == ["File under [[buildTheOther]]", "Remove [[buildTheOther]]"]
+      and not os.path.exists(os.path.join(MAIL, "m1.md")), WINDOW.labels()[:3])
+check("the selection lands on the File row, so enter files what was added",
+      WINDOW.selected == 0)
+check("tab closed the old panel itself, and that was not read as a pause",
+      "hide_overlay" in WINDOW.commands and "paused" not in MESSAGES[-1])
+step(lambda: WINDOW.tab("kenya"))
+check("a second tab adds a second link",
       WINDOW.labels()[0] == "File under [[buildTheOther]] [[kenya]]", WINDOW.labels()[:1])
-step(lambda: WINDOW.callback(0))
+step(lambda: WINDOW.tab("Remove [[kenya]]"))
+check("tab on Remove takes a link back, and the hub is offered again",
+      WINDOW.labels()[0] == "File under [[buildTheOther]]" and "kenya" in WINDOW.labels())
+step(lambda: WINDOW.tab("Flag: high priority"))
+check("tab on a flag sets it and shows it on the File row",
+      WINDOW.labels()[0] == u"File under [[buildTheOther]] \u00b7 high priority",
+      WINDOW.labels()[:1])
+step(lambda: WINDOW.press("Flag: to reply"))
+check("enter on a flag row toggles it too -- it never files",
+      WINDOW.labels()[0] == u"File under [[buildTheOther]] \u00b7 to reply, high priority"
+      and not os.path.exists(os.path.join(MAIL, "m1.md")), WINDOW.labels()[:1])
+before = list(WINDOW.labels())
+step(lambda: WINDOW.tab("Discard"))
+check("tab on Discard does nothing at all",
+      WINDOW.labels() == before and not os.path.isdir(os.path.join(BATCH, "discarded")))
+
+print("\n/activity")
+step(lambda: WINDOW.tab("/activity"))
+check("only activities are listed, with what is already added and the way back",
+      WINDOW.labels() == [u"File under [[buildTheOther]] \u00b7 to reply, high priority",
+                          "Remove [[buildTheOther]]", "runTheThing", "/all"],
+      WINDOW.labels())
+check("each shows its title, which is the point of browsing", WINDOW.rows[2][1] == "Runthething",
+      WINDOW.rows[2])
+step(lambda: WINDOW.press("/all"))
+check("enter on /all brings everything back and files nothing",
+      "kenya" in WINDOW.labels() and "Discard" in WINDOW.labels()
+      and not os.path.exists(os.path.join(MAIL, "m1.md")))
+step(lambda: WINDOW.press("kenya"))
 text = vault_note("m1.md")
-check("both links on one line, and the flag set",
-      u"---\r\n[[buildTheOther]] [[kenya]]\r\nDear" in text and u"\r\ntoreply: true\r\n" in text)
+check("enter on a hub files what was added PLUS that hub, with the flags",
+      u"---\r\n[[buildTheOther]] [[kenya]]\r\nDear" in text
+      and u"\r\ntoreply: true\r\n" in text and u"\r\npriority: high\r\n" in text, text[:200])
 
 print("\npersonal")
-check("a personal hint offers 'file as personal' first",
-      WINDOW.labels()[0] == "File as personal, with no link", WINDOW.labels()[:2])
+check("a personal hint offers filing as personal, with no link, first",
+      WINDOW.labels()[0] == u"File with no link \u00b7 personal", WINDOW.labels()[:2])
 step(lambda: WINDOW.callback(0))
 text = vault_note("p1.md")
 check("filed with personal: true and no link",
@@ -377,6 +427,7 @@ check("review resumes on the same email, undo stack intact",
 step(lambda: WINDOW.callback(0))
 
 print("\nthe sweep")
+check("the tab context is false in the sweep", context() is False)
 check("what is left has no hub: one list, bulk discard as its first row",
       WINDOW.labels()[0] == "Discard all 4", WINDOW.labels())
 check("sorted by sender", [l.split(u" — ")[0] for l in WINDOW.labels()[1:5]]
