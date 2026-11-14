@@ -215,6 +215,37 @@
             { "key": "email_batch_panel", "operator": "equal", "operand": true }
         ]
     },
+    { // EmailBatch.py: toggle a frontmatter flag on the email in hand, from
+      // any row of the per-email panel: ctrl+r to reply, ctrl+h high
+      // priority, ctrl+p personal. The panel reopens on the same email with
+      // the flag shown on its File row.
+      //
+      // All three are taken elsewhere -- ctrl+p is Goto Anything, ctrl+h is
+      // Replace, ctrl+r is Goto Symbol -- and all three are overlays or panels
+      // that would close this one. The context gate means they are borrowed
+      // only while a per-email panel is open and are themselves again the
+      // moment it closes. FLAG_KEY_LABELS in EmailBatch.py is what the panel
+      // SAYS the keys are; change both or neither.
+        "keys": ["ctrl+r"], "command": "email_batch_flag", "args": { "flag": "toreply" }, "context":
+        [
+            { "key": "overlay_visible", "operator": "equal", "operand": true },
+            { "key": "email_batch_panel", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+h"], "command": "email_batch_flag", "args": { "flag": "priority" }, "context":
+        [
+            { "key": "overlay_visible", "operator": "equal", "operand": true },
+            { "key": "email_batch_panel", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+p"], "command": "email_batch_flag", "args": { "flag": "personal" }, "context":
+        [
+            { "key": "overlay_visible", "operator": "equal", "operand": true },
+            { "key": "email_batch_panel", "operator": "equal", "operand": true }
+        ]
+    },
     { // EmailBatch.py: right / left step to the next / previous pending email
       // in the per-email panel WITHOUT deciding anything -- to see what else a
       // sender or a thread holds before a bulk discard, or to deal with

@@ -501,7 +501,7 @@ flowchart LR
    | `right` / `left` | shows the next / previous pending email without deciding anything, while nothing is typed in the panel (once something is, they move the text cursor). Every email keeps its number — `10/76` stays `10/76` — and after a decision the review carries on from where you are, coming back to what you stepped over once it reaches the end. Links and flags you added to an email stay with it while you look at others |
    | *Discard all N from …* / *the rest of this thread* | the same, for every pending email from that sender or in that conversation; the row lists the other subjects it would take |
    | *Discard and mute …* | discards them and never stages that sender again |
-   | *Flag: to reply / high priority / personal* | `tab` (or `enter`) toggles the frontmatter flag; it never files |
+   | `ctrl+r` / `ctrl+h` / `ctrl+p` | toggles **to reply** / **high priority** / **personal** on the email in hand, from any row. The same as `tab` on a *Flag:* row; neither files. While a per-email panel is open these keys are not Goto Symbol, Replace and Goto Anything |
    | *Undo: …* | takes back the last decision, as far back as the batch goes |
    | `esc` | pauses; *Email batch: Review* resumes |
 

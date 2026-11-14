@@ -591,6 +591,21 @@ check("what was added to an email is still there on coming back",
 arrow(-1)
 check("left at the first stays put", WINDOW.placeholder.startswith(u"1/4")
       and "first email still pending" in MESSAGES[-1])
+step(lambda: eb.EmailBatchFlagCommand(WINDOW).run("priority"))
+check("a flag shortcut toggles its flag and keeps the email and its links",
+      WINDOW.placeholder.startswith(u"1/4")
+      and WINDOW.labels()[0] == u"File under [[runTheThing]] · high priority"
+      and len(s3.left) == 3, WINDOW.labels()[:1])
+check("the flag rows say which key toggles them, and which are on",
+      [r[1] for r in WINDOW.rows if r[0].startswith("Flag:")]
+      == [u"ctrl+r", u"on · ctrl+h", u"ctrl+p"],
+      [r for r in WINDOW.rows if r[0].startswith("Flag:")])
+step(lambda: eb.EmailBatchFlagCommand(WINDOW).run("personal"))
+step(lambda: eb.EmailBatchFlagCommand(WINDOW).run("priority"))
+check("pressing it again turns it off; the others are independent",
+      WINDOW.labels()[0] == u"File under [[runTheThing]] · personal", WINDOW.labels()[:1])
+step(lambda: eb.EmailBatchFlagCommand(WINDOW).run("nonsense"))
+check("an unknown flag is ignored", WINDOW.labels()[0] == u"File under [[runTheThing]] · personal")
 arrow(1)
 arrow(1)
 step(lambda: eb.EmailBatchDiscardCommand(WINDOW).run())

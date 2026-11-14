@@ -16,7 +16,8 @@ The Sublime third of the email batch workflow:
      when that row is a hub. The proposals are the first rows, so Enter alone
      accepts a good one; every hub is listed underneath, so typing a few
      letters finds another. The list opens on activities; "/all" widens it
-     to every hub and person. ctrl+d discards the email in hand. LEFT and
+     to every hub and person. ctrl+d discards the email in hand; ctrl+r,
+     ctrl+h and ctrl+p toggle to-reply, high priority and personal. LEFT and
      RIGHT step to the neighbouring pending email without deciding anything;
      every email keeps its number, and a decision carries on from where you
      are rather than from the top.
@@ -113,6 +114,9 @@ BATCH_NAME_RE = re.compile(r"^\d{8}_\d{4,6}$")
 FLAGS = (("toreply", "true", "to reply"),
          ("priority", "high", "high priority"),
          ("personal", "true", "personal"))
+# What the panel prints beside each flag row. The bindings themselves are in
+# Default.sublime-keymap; change both or neither.
+FLAG_KEY_LABELS = {"toreply": "ctrl+r", "priority": "ctrl+h", "personal": "ctrl+p"}
 WAIT_POLL_MS = 800
 # Classes offered as a "/name" row that narrows the per-email panel to that
 # class, for browsing what there is. Activities only: they are where four in
@@ -581,7 +585,8 @@ class Session(object):
                 annotation="never staged again", item_kind=KIND_DISCARD)
         for key, _, label in FLAGS:
             add("flag", key, u"Flag: {0}".format(label),
-                annotation="on" if item["flags"].get(key) else "tab",
+                annotation=(u"on · " if item["flags"].get(key) else u"")
+                + FLAG_KEY_LABELS.get(key, "tab"),
                 item_kind=KIND_OPTION)
         # The list below holds one class at a time and opens on DEFAULT_FILTER.
         # Each other view is a row: "/all" for every hub and person, and a
@@ -672,6 +677,19 @@ class Session(object):
         self.panel = None
         self.window.run_command("hide_overlay")
         self.later(lambda: self.show_item(fn))
+
+    def flag_key(self, key):
+        """A flag shortcut in the per-email panel: toggle it, whatever row is
+        highlighted, and come straight back to the same email."""
+        panel = self.panel
+        if not panel or not self.item or self.item["fn"] != panel["fn"]:
+            return
+        self.adjust("flag", key)
+        fn = panel["fn"]
+        self.dismissed = panel["token"]
+        self.panel = None
+        self.window.run_command("hide_overlay")
+        self.later(lambda: self.show_item(fn, keep=True))
 
     def discard_key(self):
         """The discard shortcut in the per-email panel: this email, now."""
@@ -1105,6 +1123,14 @@ class EmailBatchDiscardCommand(sublime_plugin.WindowCommand):
     def run(self):
         if _session:
             _session.discard_key()
+
+
+class EmailBatchFlagCommand(sublime_plugin.WindowCommand):
+    """ctrl+r / ctrl+h / ctrl+p while the per-email panel is open."""
+
+    def run(self, flag):
+        if _session and flag in FLAG_KEY_LABELS:
+            _session.flag_key(flag)
 
 
 class EmailBatchStepCommand(sublime_plugin.WindowCommand):
