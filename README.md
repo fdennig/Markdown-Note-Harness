@@ -494,10 +494,10 @@ flowchart LR
    |---|---|
    | `enter` | **files** the email: with whatever you added with `tab`, plus the row you are on when that row is a hub. On the first row that is the proposed link, so `enter` alone accepts a good proposal |
    | `tab` | **adds** the highlighted row and keeps the panel open: a hub adds its link, a *Flag:* row toggles that flag, *Remove [[x]]* takes a link back. Afterwards the selection is on *File under [[a]] [[b]]*, where `enter` files exactly what you added |
-   | type a few letters | narrows to that hub; every hub is in the list. Then `tab` to add it or `enter` to file under it |
-   | `/activity` | shows only the activities, to browse what there is; `/all` brings everything back |
+   | type a few letters | narrows to that note. Then `tab` to add it or `enter` to file under it |
+   | `/all` | the list under the proposals opens on **activities only**, each with its title, so you can arrow through what there is. `/all` widens it to every hub and person for the email in hand, and `/activity` narrows it again. A proposal is shown whatever its class |
    | *File with no link* | files it as it is |
-   | *Discard* | leaves it out |
+   | `ctrl+d`, or *Discard* | leaves it out. The key works from any row |
    | *Discard all N from …* / *the rest of this thread* | the same, for every pending email from that sender or in that conversation |
    | *Discard and mute …* | discards them and never stages that sender again |
    | *Flag: to reply / high priority / personal* | `tab` (or `enter`) toggles the frontmatter flag; it never files |

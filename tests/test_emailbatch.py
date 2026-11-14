@@ -315,9 +315,14 @@ check("its proposal is the first row, so enter accepts",
       WINDOW.labels()[0] == "[[runTheThing]]" and WINDOW.selected == 0, WINDOW.labels()[:3])
 check("the staged note is previewed, read-only",
       WINDOW.previews[-1].path.endswith("t1.md") and WINDOW.previews[-1].read_only)
-check("every hub is listed below, the proposed one only once",
-      WINDOW.labels().count("[[runTheThing]]") == 1 and "kenya" in WINDOW.labels()
+check("the list below opens on activities, the proposed one only once",
+      WINDOW.labels().count("[[runTheThing]]") == 1 and "buildTheOther" in WINDOW.labels()
       and "runTheThing" not in WINDOW.labels())
+check("countries and people are not in it until /all is chosen",
+      "kenya" not in WINDOW.labels() and "anaPerson" not in WINDOW.labels()
+      and "/all" in WINDOW.labels() and "/activity" not in WINDOW.labels())
+check("discard and the flags are there without leaving the filter",
+      "Discard" in WINDOW.labels() and "Flag: high priority" in WINDOW.labels())
 
 print("\naccept, and the thread carries it")
 step(lambda: WINDOW.callback(0))
@@ -329,12 +334,13 @@ check("the staged copy moved to filed/",
 check("the next email in that thread now proposes the same hub",
       WINDOW.placeholder.startswith(u"2/9") and WINDOW.labels()[0] == "[[runTheThing]]",
       WINDOW.labels()[:3])
-step(lambda: WINDOW.press("kenya"))
-check("typing another hub replaces the proposal", u"[[kenya]]\r\n" in vault_note("t2.md")
+step(lambda: WINDOW.press("buildTheOther"))
+check("typing another hub replaces the proposal",
+      u"[[buildTheOther]]\r\n" in vault_note("t2.md")
       and u"runTheThing" not in vault_note("t2.md"))
 log = decisions()
 check("the decision log records what was proposed and what was chosen",
-      log[-1]["action"] == "accept" and log[-1]["links"] == ["kenya"]
+      log[-1]["action"] == "accept" and log[-1]["links"] == ["buildTheOther"]
       and log[-1]["proposed"][0] == {"hub": "runTheThing", "tier": "thread"}, log[-1])
 
 print("\ntab adds, enter files")
@@ -356,6 +362,11 @@ check("the selection lands on the File row, so enter files what was added",
       WINDOW.selected == 0)
 check("tab closed the old panel itself, and that was not read as a pause",
       "hide_overlay" in WINDOW.commands and "paused" not in MESSAGES[-1])
+step(lambda: WINDOW.tab("/all"))
+check("/all is the step you take to reach a country or a person",
+      "kenya" in WINDOW.labels() and "anaPerson" in WINDOW.labels()
+      and "/activity" in WINDOW.labels() and "/all" not in WINDOW.labels()
+      and WINDOW.labels()[0] == "File under [[buildTheOther]]", WINDOW.labels()[:12])
 step(lambda: WINDOW.tab("kenya"))
 check("a second tab adds a second link",
       WINDOW.labels()[0] == "File under [[buildTheOther]] [[kenya]]", WINDOW.labels()[:1])
@@ -377,12 +388,13 @@ check("tab on Discard does nothing at all",
 
 print("\n/activity")
 step(lambda: WINDOW.tab("/activity"))
-check("only activities are listed, with what is already added and the way back",
-      WINDOW.labels() == [u"File under [[buildTheOther]] \u00b7 to reply, high priority",
-                          "Remove [[buildTheOther]]", "runTheThing", "/all"],
-      WINDOW.labels())
-check("each shows its title, which is the point of browsing", WINDOW.rows[2][1] == "Runthething",
-      WINDOW.rows[2])
+check("back to activities only, what was added still on top",
+      WINDOW.labels()[:2] == [u"File under [[buildTheOther]] \u00b7 to reply, high priority",
+                              "Remove [[buildTheOther]]"]
+      and WINDOW.labels()[-1] == "runTheThing" and "kenya" not in WINDOW.labels()
+      and "Discard" in WINDOW.labels() and "/all" in WINDOW.labels(), WINDOW.labels())
+check("each shows its title, which is the point of browsing",
+      WINDOW.rows[-1][1] == "Runthething", WINDOW.rows[-1])
 step(lambda: WINDOW.press("/all"))
 check("enter on /all brings everything back and files nothing",
       "kenya" in WINDOW.labels() and "Discard" in WINDOW.labels()
@@ -410,7 +422,11 @@ check("undo takes the note back out of the vault",
       and os.path.isfile(os.path.join(BATCH, "p1.md")))
 check("and puts it straight back in front of you", u"Dinner" in WINDOW.placeholder)
 check("the log says so", decisions()[-1]["action"] == "undo")
-step(lambda: WINDOW.press("Discard"))
+check("the list is back on activities for the next email", "kenya" not in WINDOW.labels())
+step(lambda: eb.EmailBatchDiscardCommand(WINDOW).run())
+check("the discard key acts on the email in hand, whatever row is highlighted",
+      decisions()[-1]["action"] == "discard" and decisions()[-1]["via"] == "key"
+      and decisions()[-1]["file"] == "p1.md" and "paused" not in MESSAGES[-1], decisions()[-1])
 check("discard moves the staged copy aside and writes nothing to the vault",
       os.path.isfile(os.path.join(BATCH, "discarded", "p1.md"))
       and not os.path.exists(os.path.join(MAIL, "p1.md")))
@@ -427,7 +443,12 @@ check("review resumes on the same email, undo stack intact",
 step(lambda: WINDOW.callback(0))
 
 print("\nthe sweep")
-check("the tab context is false in the sweep", context() is False)
+check("the tab and discard-key context is false in the sweep", context() is False)
+shelved = sorted(os.listdir(os.path.join(BATCH, "discarded")))
+eb.EmailBatchDiscardCommand(WINDOW).run()
+run_timers()
+check("so the discard key does nothing there",
+      sorted(os.listdir(os.path.join(BATCH, "discarded"))) == shelved)
 check("what is left has no hub: one list, bulk discard as its first row",
       WINDOW.labels()[0] == "Discard all 4", WINDOW.labels())
 check("sorted by sender", [l.split(u" — ")[0] for l in WINDOW.labels()[1:5]]
@@ -473,7 +494,7 @@ check("every decision is in the log",
       [r["action"] for r in log].count("accept") == 6
       and [r["action"] for r in log].count("undo") == 2, [r["action"] for r in log])
 check("discards say how they were made",
-      set(r.get("via") for r in log if r["action"] == "discard") == set(["item", "mute", "sweep"]))
+      set(r.get("via") for r in log if r["action"] == "discard") == set(["key", "item", "mute", "sweep"]))
 
 # ------------------------------------------------------------------
 # Waiting on the agent

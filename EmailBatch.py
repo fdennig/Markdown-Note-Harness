@@ -15,7 +15,8 @@ The Sublime third of the email batch workflow:
      panel stays; ENTER FILES it, with what was added plus the row it is on
      when that row is a hub. The proposals are the first rows, so Enter alone
      accepts a good one; every hub is listed underneath, so typing a few
-     letters finds another; "/activity" narrows the list to activities.
+     letters finds another. The list opens on activities; "/all" widens it
+     to every hub and person. ctrl+d discards the email in hand.
 
 **An email reaches the vault only when you accept it here.** Accepting writes
 the staged note into `<vault>/emails/` under the macro's own filename, with
@@ -114,6 +115,11 @@ WAIT_POLL_MS = 800
 # class, for browsing what there is. Activities only: they are where four in
 # five email links go, and the only list long enough to need reminding of.
 FILTER_CLASSES = ("activity",)
+# What the hub list shows when a panel opens. None would mean everything.
+DEFAULT_FILTER = "activity"
+# Shown beside the Discard row and in the placeholder; the binding itself is in
+# Default.sublime-keymap, and the two have to be changed together.
+DISCARD_KEY_LABEL = "ctrl+d"
 
 _session = None
 _busy = {"prepare": False}
@@ -485,8 +491,8 @@ class Session(object):
     def show_item(self, fn, keep=False):
         """The panel for one email. TAB ADDS, ENTER FILES.
 
-        Tab on a hub adds its link, on a flag toggles it, on "/activity"
-        narrows the list, on "Remove" takes a link back -- and the panel comes
+        Tab on a hub adds its link, on a flag toggles it, on "/all" widens
+        the list, on "Remove" takes a link back -- and the panel comes
         straight back for the same email. Enter writes the note: with what
         has been added so far, plus the row it is on when that row is a hub.
         So Enter alone on a good proposal is still one key, and typing a name
@@ -497,7 +503,7 @@ class Session(object):
         """
         note = self.notes[fn]
         if not keep or not self.item or self.item["fn"] != fn:
-            self.item = {"fn": fn, "links": [], "only": None,
+            self.item = {"fn": fn, "links": [], "only": DEFAULT_FILTER,
                          "flags": {"personal": bool(note.get("personal_hint"))}}
             self.preview(fn)
         item = self.item
@@ -530,55 +536,59 @@ class Session(object):
 
         labels = dict((h["name"], h.get("label") or "") for h in self.data["hubs"])
         proposed = [p for p in self.proposals(fn) if p["hub"] not in chosen]
-        skip = set(chosen)
-        if only:
-            # One class, to browse: nothing but its hubs and the way back.
-            for hub in self.data["hubs"]:
-                if hub["class"] == only and hub["name"] not in skip:
-                    add("pick", hub["name"], hub["name"],
-                        details=hub.get("label") or "", annotation=hub["class"])
-            add("only", None, u"/all", annotation="every hub again",
+        for p in proposed:
+            add("pick", p["hub"], u"[[{0}]]".format(p["hub"]),
+                details=labels.get(p["hub"], ""),
+                annotation=u"{0} · {1}".format(p["tier"], p.get("why", "")),
+                item_kind=KIND_PROPOSED)
+        if not chosen and not item["flags"].get("personal"):
+            add("file", None, nolink, item_kind=KIND_FILE)
+        add("discard", [fn], u"Discard", annotation=DISCARD_KEY_LABEL,
+            item_kind=KIND_DISCARD)
+        by_sender = self.same(fn, "from_email")
+        if len(by_sender) > 1:
+            add("discard", by_sender, u"Discard all {0} from {1}".format(
+                len(by_sender), note.get("from") or note.get("from_email")),
+                item_kind=KIND_DISCARD)
+        by_thread = self.same(fn, "thread")
+        if len(by_thread) > 1:
+            add("discard", by_thread, u"Discard the rest of this thread ({0})".format(
+                len(by_thread)), item_kind=KIND_DISCARD)
+        if note.get("from_email") and not note.get("sent"):
+            add("mute", None, u"Discard and mute " + note["from_email"],
+                annotation="never staged again", item_kind=KIND_DISCARD)
+        for key, _, label in FLAGS:
+            add("flag", key, u"Flag: {0}".format(label),
+                annotation="on" if item["flags"].get(key) else "tab",
                 item_kind=KIND_OPTION)
-        else:
-            for p in proposed:
-                add("pick", p["hub"], u"[[{0}]]".format(p["hub"]),
-                    details=labels.get(p["hub"], ""),
-                    annotation=u"{0} · {1}".format(p["tier"], p.get("why", "")),
-                    item_kind=KIND_PROPOSED)
-            if not chosen and not item["flags"].get("personal"):
-                add("file", None, nolink, item_kind=KIND_FILE)
-            add("discard", [fn], u"Discard", item_kind=KIND_DISCARD)
-            by_sender = self.same(fn, "from_email")
-            if len(by_sender) > 1:
-                add("discard", by_sender, u"Discard all {0} from {1}".format(
-                    len(by_sender), note.get("from") or note.get("from_email")),
-                    item_kind=KIND_DISCARD)
-            by_thread = self.same(fn, "thread")
-            if len(by_thread) > 1:
-                add("discard", by_thread, u"Discard the rest of this thread ({0})".format(
-                    len(by_thread)), item_kind=KIND_DISCARD)
-            if note.get("from_email") and not note.get("sent"):
-                add("mute", None, u"Discard and mute " + note["from_email"],
-                    annotation="never staged again", item_kind=KIND_DISCARD)
-            for key, _, label in FLAGS:
-                add("flag", key, u"Flag: {0}".format(label),
-                    annotation="on" if item["flags"].get(key) else "tab",
+        # The list below holds one class at a time and opens on DEFAULT_FILTER.
+        # Each other view is a row: "/all" for every hub and person, and a
+        # "/class" row for each class in FILTER_CLASSES not being shown.
+        if only:
+            add("only", None, u"/all", annotation="every hub and person",
+                item_kind=KIND_OPTION)
+        for cls in FILTER_CLASSES:
+            if cls != only:
+                add("only", cls, u"/" + cls, annotation="only these",
                     item_kind=KIND_OPTION)
-            for cls in FILTER_CLASSES:
-                add("only", cls, u"/" + cls, annotation="only these, to browse",
-                    item_kind=KIND_OPTION)
-            if self.undo_stack:
-                add("undo", None, u"Undo: " + self.undo_stack[-1]["label"],
-                    item_kind=KIND_UNDO)
-            skip |= set(p["hub"] for p in proposed)
-            for hub in self.data["hubs"]:
-                if hub["name"] not in skip:
-                    add("pick", hub["name"], hub["name"], annotation=hub["class"])
+        if self.undo_stack:
+            add("undo", None, u"Undo: " + self.undo_stack[-1]["label"],
+                item_kind=KIND_UNDO)
+        # A proposal is listed above whatever its class; below, the filter
+        # decides. Under a filter each hub shows its title, since the point of
+        # narrowing is to read what there is.
+        skip = set(chosen) | set(p["hub"] for p in proposed)
+        for hub in self.data["hubs"]:
+            if hub["name"] in skip or (only and hub["class"] != only):
+                continue
+            add("pick", hub["name"], hub["name"],
+                details=(hub.get("label") or "") if only else "",
+                annotation=hub["class"])
 
         done = self.total - len(self.left) + 1
-        placeholder = u"{0}/{1} · {2} · {3} — {4}   [tab adds · enter files]".format(
+        placeholder = u"{0}/{1} · {2} · {3} — {4}   [tab adds · enter files · {5} discards]".format(
             done, self.total, note.get("date", ""), note.get("from", ""),
-            note.get("subject", ""))
+            note.get("subject", ""), DISCARD_KEY_LABEL)
 
         def on_select(index):
             action, arg = actions[index]
@@ -617,6 +627,16 @@ class Session(object):
         else:
             return False
         return True
+
+    def discard_key(self):
+        """The discard shortcut in the per-email panel: this email, now."""
+        panel = self.panel
+        if not panel:
+            return
+        self.dismissed = panel["token"]
+        self.panel = None
+        self.window.run_command("hide_overlay")
+        self.discard([panel["fn"]], "key")
 
     def tab(self):
         """Tab in the per-email panel: add the highlighted row and stay."""
@@ -1029,6 +1049,15 @@ class EmailBatchTabCommand(sublime_plugin.WindowCommand):
     def run(self):
         if _session:
             _session.tab()
+
+
+class EmailBatchDiscardCommand(sublime_plugin.WindowCommand):
+    """The discard shortcut while the per-email panel is open. Same gate as
+    email_batch_tab, so it too exists nowhere else."""
+
+    def run(self):
+        if _session:
+            _session.discard_key()
 
 
 class EmailBatchContext(sublime_plugin.EventListener):

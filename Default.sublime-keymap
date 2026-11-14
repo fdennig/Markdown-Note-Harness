@@ -197,5 +197,22 @@
             { "key": "overlay_visible", "operator": "equal", "operand": true },
             { "key": "email_batch_panel", "operator": "equal", "operand": true }
         ]
+    },
+    { // EmailBatch.py: discard the email in hand, from anywhere in the
+      // per-email panel, without finding the Discard row first. Nineteen in
+      // twenty staged emails are discards, so this is the most-used key of a
+      // review.
+      //
+      // ctrl+d rather than a bare letter because the panel's input line is
+      // where hub names are typed. Outside this context ctrl+d is Sublime's
+      // find_under_expand, which means nothing in an overlay, so nothing is
+      // taken away. The same gate as tab above keeps it out of every other
+      // panel. DISCARD_KEY_LABEL in EmailBatch.py is what the panel SAYS the
+      // key is; change both or neither.
+        "keys": ["ctrl+d"], "command": "email_batch_discard", "context":
+        [
+            { "key": "overlay_visible", "operator": "equal", "operand": true },
+            { "key": "email_batch_panel", "operator": "equal", "operand": true }
+        ]
     }
 ]
