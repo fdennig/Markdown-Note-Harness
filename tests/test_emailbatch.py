@@ -234,6 +234,12 @@ check("the prefix goes on every attachment name and nowhere else",
 check("without a prefix the names are untouched",
       u'  - "a b.pdf"\r\n' in eb.file_text(WITH, ["x"], {}))
 
+check("prefix_attachments touches only the names it is given, and only once",
+      eb.prefix_attachments(WITH, "P_", ["a b.pdf"]).count(u"P_") == 1
+      and u'  - "P_a b.pdf"\r\n  - "logo.png"\r\n' in eb.prefix_attachments(WITH, "P_", ["a b.pdf"])
+      and eb.prefix_attachments(eb.prefix_attachments(WITH, "P_", ["a b.pdf"]), "P_", ["a b.pdf"])
+      == eb.prefix_attachments(WITH, "P_", ["a b.pdf"]))
+
 print("\nunique_target")
 taken = set([os.path.join("d", "a.md"), os.path.join("d", "a (2).md")])
 check("a free name is used as is",
@@ -695,8 +701,9 @@ check("shown with the links on the File row",
       WINDOW.labels()[:1])
 step(lambda: WINDOW.callback(0))
 text = vault_note("att.md")
-check("the note is filed at once, with the prefixed names",
-      u'  - "2026-11-10_0905_a b.pdf"\r\n' in text and u"[[runTheThing]]" in text)
+check("the note is filed at once, its attachment names not yet prefixed",
+      u'  - "a b.pdf"\r\n' in text and u"2026-11-10_0905_" not in text
+      and u"[[runTheThing]]" in text)
 check("Outlook is asked by entry_id for exactly that message, into emails/attachments",
       len(calls) == 1 and calls[0]["action"] == "save_attachments"
       and calls[0]["entry_id"] == "00AA" and calls[0]["store_id"] == "00BB"
@@ -704,10 +711,20 @@ check("Outlook is asked by entry_id for exactly that message, into emails/attach
       and os.path.normcase(calls[0]["dir"]) == os.path.normcase(ATT), calls)
 check("the review has already moved on while Outlook works",
       u"No files" in WINDOW.placeholder)
-answers.pop(0)({"ok": True, "saved": ["2026-11-10_0905_a b.pdf", "2026-11-10_0905_logo.png"],
-                "failed": []}, None)
-check("a clean save raises nothing", errors == []
-      and sorted(os.listdir(ATT)) == ["2026-11-10_0905_a b.pdf", "2026-11-10_0905_logo.png"])
+os.remove(os.path.join(ATT, "2026-11-10_0905_logo.png"))     # the bridge skips inline images
+answers.pop(0)({"ok": True, "saved": ["2026-11-10_0905_a b.pdf"], "failed": [],
+                "skipped": ["logo.png"]}, None)
+text = vault_note("att.md")
+check("once Outlook answers, the saved file's name gets its prefix in the note",
+      u'  - "2026-11-10_0905_a b.pdf"\r\n' in text, text[:330])
+check("a skipped inline image keeps its plain name, so nothing points at a missing file",
+      u'  - "logo.png"\r\n' in text and text.count(u"2026-11-10_0905_") == 1)
+check("the link, BOM and CRLF survive that second write",
+      u"---\r\n[[runTheThing]]\r\nDear all," in text and text.startswith(u"\ufeff---\r\n")
+      and u"\n" not in text.replace(u"\r\n", u""))
+check("a clean save raises nothing and says what was skipped", errors == []
+      and os.listdir(ATT) == ["2026-11-10_0905_a b.pdf"]
+      and "skipped 1 inline" in MESSAGES[-1], MESSAGES[-1])
 
 check("an email with no attachments has no such row",
       not [l for l in WINDOW.labels() if l.startswith("Save attachments")])

@@ -186,12 +186,41 @@ def note_refs(text):
     return (entry.group(1) if entry else "", store.group(1) if store else "", prefix)
 
 
+def prefix_attachments(text, prefix, names):
+    """`text` with `prefix` put in front of the listed attachment names.
+
+    Only names in `names` are touched -- the ones Outlook reports it saved --
+    so an inline image that was skipped keeps its plain name and the note
+    never points at a file that is not there. A name already carrying the
+    prefix is left alone, which makes a second call harmless. None when the
+    text has no frontmatter.
+    """
+    lines = text.splitlines(True)
+    if not lines or lines[0].lstrip(u"\ufeff").strip() != "---":
+        return None
+    close = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ("---", "..."):
+            close = i
+            break
+    if close is None:
+        return None
+    wanted = set(names)
+    for i in attachment_rows(lines, close):
+        m = ATTACHMENT_ITEM_RE.match(lines[i])
+        if m.group(2) in wanted:
+            lines[i] = m.group(1) + prefix + m.group(2) + m.group(3)
+    return "".join(lines)
+
+
 def file_text(text, links, flags, attachment_prefix=""):
     """A staged note's text as it should be filed.
 
     `attachment_prefix`, when given, is put in front of every name under
-    `attachments:` -- the names the files are being saved under, so that F12
-    on one of them opens it, exactly as after ExtractEmailWithAttachments.
+    `attachments:`. The review does not use it -- it files the note with the
+    names as they are and prefixes the saved ones afterwards, through
+    prefix_attachments -- but it is what a caller that already has the files
+    on disk wants.
 
     `links` go on the first body line as `[[a]] [[b]]`, replacing the blank
     line the macro leaves under the closing `---` -- which is where the caret
@@ -652,6 +681,8 @@ class Session(object):
                 + FLAG_KEY_LABELS.get(key, "tab"),
                 item_kind=KIND_OPTION)
         if item["files"]:
+            # The count is what the note lists, inline images included; which
+            # of them are inline is only known to Outlook, at save time.
             add("attach", None, u"Save attachments ({0})".format(len(item["files"])),
                 details=u" · ".join(item["files"][:6])
                 + (u" · …" if len(item["files"]) > 6 else u""),
@@ -947,15 +978,16 @@ class Session(object):
             if attach:
                 entry_id, store_id, prefix = note_refs(text)
                 if not entry_id or not prefix or not francis_helper("run_bridge"):
-                    # Never write names for files that cannot be saved.
-                    prefix = ""
                     say("attachments NOT saved for {0}: the note has no Outlook "
                         "reference to fetch them by".format(fn))
                 else:
                     request = {"action": "save_attachments", "entry_id": entry_id,
                                "store_id": store_id, "prefix": prefix,
                                "dir": os.path.join(folder, ATTACHMENTS_DIR)}
-            new = file_text(text, links, flags, prefix)
+            # Filed with the names as the macro wrote them. A name gets its
+            # prefix only once Outlook says that file is on disk -- see
+            # save_attachments -- so the note never names a file that is not.
+            new = file_text(text, links, flags)
             if new is None:
                 raise ValueError("no frontmatter")
             dest = unique_target(folder, fn)
@@ -985,12 +1017,15 @@ class Session(object):
     def save_attachments(self, request, entry, subject):
         """Ask Outlook for the files, in the background, and say so if it fails.
 
-        The note is already filed, with the prefixed names, by the time this
-        runs: a review that waited on PowerShell and COM for every attachment
-        would not be a fast one. The price is that a failure arrives after the
-        fact -- so it is an error dialog, not a status message that the next
-        panel would have covered. What was saved is recorded on the undo
-        entry, so undoing the filing takes the files back out as well.
+        The note is already filed by the time this runs: a review that
+        waited on PowerShell and COM for every attachment would not be a fast
+        one. When Outlook answers, the filed note is rewritten once, to put
+        the date prefix on the names that were saved -- and only those: inline
+        images are skipped by the bridge and keep their plain name. The price
+        of not waiting is that a failure arrives after the fact, so it is an
+        error dialog, not a status message that the next panel would have
+        covered. What was saved is recorded on the undo entry, so undoing the
+        filing takes the files back out as well.
         """
         try:
             if not os.path.isdir(request["dir"]):
@@ -1002,16 +1037,33 @@ class Session(object):
             if error or not result or not result.get("ok"):
                 return self.attachment_failure(
                     subject, error or (result or {}).get("message") or "no answer")
-            saved = [os.path.join(request["dir"], name)
-                     for name in result.get("saved") or []]
+            names = result.get("saved") or []
+            saved = [os.path.join(request["dir"], name) for name in names]
             entry["saved"].extend(saved)
             if entry.get("undone"):
                 remove_files(saved)
+            elif names:
+                bare = [n[len(request["prefix"]):] for n in names
+                        if n.startswith(request["prefix"])]
+                try:
+                    with io.open(entry["dest"], "r", encoding="utf-8", newline="") as f:
+                        text = f.read()
+                    new = prefix_attachments(text, request["prefix"], bare)
+                    if new is not None and new != text:
+                        with io.open(entry["dest"], "w", encoding="utf-8", newline="") as f:
+                            f.write(new)
+                except (IOError, OSError) as e:
+                    return self.attachment_failure(
+                        subject, "the files were saved but the note could not be "
+                        "updated with their names: {0}".format(e))
             failed = result.get("failed") or []
             if failed:
                 return self.attachment_failure(
                     subject, "could not save: " + ", ".join(failed))
-            say(u"saved {0} attachment(s) for {1}".format(len(saved), subject))
+            skipped = len(result.get("skipped") or [])
+            say(u"saved {0} attachment(s) for {1}{2}".format(
+                len(saved), subject,
+                u", skipped {0} inline".format(skipped) if skipped else u""))
 
         francis_helper("run_bridge")(request, done)
 

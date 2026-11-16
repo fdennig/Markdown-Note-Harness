@@ -19,9 +19,12 @@
 
     save_attachments also takes "dir" (an existing folder) and "prefix", and
     writes every attachment there as <prefix><FileName> -- what the macro's
-    ExtractEmailWithAttachments does, for EmailBatch.py. It answers with
-    "saved" and "failed" name lists. It needs an entry_id: saving the files of
-    a message found by guessing at its subject is not something to do unseen.
+    ExtractEmailWithAttachments does, for EmailBatch.py -- except that INLINE
+    attachments are left out: signature logos and pasted screenshots, which
+    are part of how the message looks rather than something it carries. It
+    answers with "saved" (prefixed names), "skipped" and "failed" (bare names).
+    It needs an entry_id: saving the files of a message found by guessing at
+    its subject is not something to do unseen.
 
     Response: exactly one compact JSON object on stdout, always with exit 0.
 
@@ -326,10 +329,33 @@ if ($action -eq 'save_attachments') {
     $prefix = if ($req.prefix) { [string]$req.prefix } else { '' }
     $saved = @()
     $failed = @()
+    $skipped = @()
+    # Inline means either of two things, and mail clients set one or the other:
+    #   PR_ATTACHMENT_HIDDEN (0x7FFE000B)  Outlook's own flag for "do not list
+    #                                      this in the attachment well"
+    #   PR_ATTACH_CONTENT_ID (0x3712001F)  a Content-ID the HTML body actually
+    #                                      references as cid:<id>
+    # A Content-ID alone is not enough: some senders stamp one on every real
+    # attachment, and those must still be saved. Hence the check against the
+    # body, which is read once.
+    $html = Read-Prop { [string]$item.HTMLBody } ''
     try {
         foreach ($att in $item.Attachments) {
             $name = Read-Prop { [string]$att.FileName } ''
             if (-not $name) { continue }
+            $hidden = Read-Prop {
+                [bool]$att.PropertyAccessor.GetProperty(
+                    'http://schemas.microsoft.com/mapi/proptag/0x7FFE000B')
+            } $false
+            $cid = Read-Prop {
+                [string]$att.PropertyAccessor.GetProperty(
+                    'http://schemas.microsoft.com/mapi/proptag/0x3712001F')
+            } ''
+            if ($hidden -or ($cid -and $html -and
+                             $html.IndexOf('cid:' + $cid, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                $skipped += $name
+                continue
+            }
             try {
                 $att.SaveAsFile((Join-Path ([string]$req.dir) ($prefix + $name)))
                 $saved += ($prefix + $name)
@@ -341,6 +367,7 @@ if ($action -eq 'save_attachments') {
     Emit @{
         ok = $true; action = $action; matched_by = $matchedBy
         subject = $subject; saved = @($saved); failed = @($failed)
+        skipped = @($skipped)
     }
 }
 
