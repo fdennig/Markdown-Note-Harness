@@ -17,7 +17,8 @@ The Sublime third of the email batch workflow:
      accepts a good one; every hub is listed underneath, so typing a few
      letters finds another. The list opens on activities; "/all" widens it
      to every hub and person. ctrl+d discards the email in hand; ctrl+r,
-     ctrl+h and ctrl+p toggle to-reply, high priority and personal. LEFT and
+     ctrl+h and ctrl+p toggle to-reply, high priority and personal; ctrl+a
+     toggles saving the email's attachments when it is filed. LEFT and
      RIGHT step to the neighbouring pending email without deciding anything;
      every email keeps its number, and a decision carries on from where you
      are rather than from the top.
@@ -117,6 +118,9 @@ FLAGS = (("toreply", "true", "to reply"),
 # What the panel prints beside each flag row. The bindings themselves are in
 # Default.sublime-keymap; change both or neither.
 FLAG_KEY_LABELS = {"toreply": "ctrl+r", "priority": "ctrl+h", "personal": "ctrl+p"}
+# Likewise for "save this email's attachments when it is filed".
+ATTACH_KEY_LABEL = "ctrl+a"
+ATTACHMENTS_DIR = "attachments"     # under emails_dir, where F12 looks for them
 WAIT_POLL_MS = 800
 # Classes offered as a "/name" row that narrows the per-email panel to that
 # class, for browsing what there is. Activities only: they are where four in
@@ -136,8 +140,58 @@ _busy = {"prepare": False}
 # Pure helpers -- no sublime, exercised by tests/test_emailbatch.py
 # ------------------------------------------------------------------
 
-def file_text(text, links, flags):
+ATTACHMENT_ITEM_RE = re.compile(r'^([ \t]+-[ \t]*")(.*)("[ \t]*\r?\n?)$')
+
+
+def attachment_rows(lines, close):
+    """Indices of the item lines under `attachments:` in the frontmatter."""
+    rows = []
+    inside = False
+    for i in range(1, close):
+        if re.match(r"^attachments[ \t]*:", lines[i]):
+            inside = True
+            continue
+        if inside:
+            if ATTACHMENT_ITEM_RE.match(lines[i]):
+                rows.append(i)
+            else:
+                break
+    return rows
+
+
+def attachment_names(text):
+    """The names a note's `attachments:` key lists; [] for `attachments: []`."""
+    lines = text.splitlines(True)
+    close = len(lines)
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ("---", "..."):
+            close = i
+            break
+    return [ATTACHMENT_ITEM_RE.match(lines[i]).group(2)
+            for i in attachment_rows(lines, close)]
+
+
+def note_refs(text):
+    """(entry_id, store_id, attachment prefix) read off a staged note.
+
+    The prefix is the macro's own: ExtractEmailWithAttachments names each
+    saved file `<yyyy-MM-dd_HHNN>_<name>` from the mail's received time, which
+    is the note's `date:`. Any of the three is '' when the note lacks it.
+    """
+    head = text[:16384]
+    entry = re.search(r"^[ \t]+-[ \t]*entry_id:[ \t]*(\S+)", head, re.M)
+    store = re.search(r"^[ \t]+-[ \t]*store_id:[ \t]*(\S+)", head, re.M)
+    when = re.search(r"^date:[ \t]*(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})", head, re.M)
+    prefix = "{0}_{1}{2}_".format(*when.groups()) if when else ""
+    return (entry.group(1) if entry else "", store.group(1) if store else "", prefix)
+
+
+def file_text(text, links, flags, attachment_prefix=""):
     """A staged note's text as it should be filed.
+
+    `attachment_prefix`, when given, is put in front of every name under
+    `attachments:` -- the names the files are being saved under, so that F12
+    on one of them opens it, exactly as after ExtractEmailWithAttachments.
 
     `links` go on the first body line as `[[a]] [[b]]`, replacing the blank
     line the macro leaves under the closing `---` -- which is where the caret
@@ -161,6 +215,11 @@ def file_text(text, links, flags):
     if close is None:
         return None
     eol = "\r\n" if lines[0].endswith("\r\n") else "\n"
+
+    if attachment_prefix:
+        for i in attachment_rows(lines, close):
+            m = ATTACHMENT_ITEM_RE.match(lines[i])
+            lines[i] = m.group(1) + attachment_prefix + m.group(2) + m.group(3)
 
     for key, value, _ in FLAGS:
         if not flags.get(key):
@@ -527,7 +586,8 @@ class Session(object):
         if item is None:
             item = self.drafts[fn] = {
                 "fn": fn, "links": [], "only": DEFAULT_FILTER,
-                "flags": {"personal": bool(note.get("personal_hint"))}}
+                "flags": {"personal": bool(note.get("personal_hint"))},
+                "attach": False, "files": self.attachments_of(fn)}
         if self.item is not item:
             self.preview(fn)
         self.item = item
@@ -543,6 +603,9 @@ class Session(object):
         chosen = item["links"]
         only = item["only"]
         flagged = [label for key, _, label in FLAGS if item["flags"].get(key)]
+        if item["attach"]:
+            flagged.append(u"save {0} attachment{1}".format(
+                len(item["files"]), u"" if len(item["files"]) == 1 else u"s"))
         suffix = (u" · " + u", ".join(flagged)) if flagged else u""
         nolink = u"File with no link" + suffix
 
@@ -588,6 +651,12 @@ class Session(object):
                 annotation=(u"on · " if item["flags"].get(key) else u"")
                 + FLAG_KEY_LABELS.get(key, "tab"),
                 item_kind=KIND_OPTION)
+        if item["files"]:
+            add("attach", None, u"Save attachments ({0})".format(len(item["files"])),
+                details=u" · ".join(item["files"][:6])
+                + (u" · …" if len(item["files"]) > 6 else u""),
+                annotation=(u"on · " if item["attach"] else u"") + ATTACH_KEY_LABEL,
+                item_kind=KIND_OPTION)
         # The list below holds one class at a time and opens on DEFAULT_FILTER.
         # Each other view is a row: "/all" for every hub and person, and a
         # "/class" row for each class in FILTER_CLASSES not being shown.
@@ -620,9 +689,9 @@ class Session(object):
         def on_select(index):
             action, arg = actions[index]
             if action == "file":
-                return self.accept(fn, list(chosen), item["flags"])
+                return self.accept(fn, list(chosen), item["flags"], item["attach"])
             if action == "pick":
-                return self.accept(fn, list(chosen) + [arg], item["flags"])
+                return self.accept(fn, list(chosen) + [arg], item["flags"], item["attach"])
             if action == "discard":
                 return self.discard(arg, "item")
             if action == "mute":
@@ -651,9 +720,22 @@ class Session(object):
             item["flags"][arg] = not item["flags"].get(arg)
         elif action == "only":
             item["only"] = arg
+        elif action == "attach":
+            if not item["files"]:
+                say("this email has no attachments")
+                return False
+            item["attach"] = not item["attach"]
         else:
             return False
         return True
+
+    def attachments_of(self, fn):
+        try:
+            with io.open(os.path.join(self.batch, fn), "r", encoding="utf-8",
+                         newline="") as f:
+                return attachment_names(f.read(16384))
+        except (IOError, OSError):
+            return []
 
     def subjects(self, fns, current):
         """The other emails a bulk row would take, as one line of subjects."""
@@ -680,11 +762,16 @@ class Session(object):
 
     def flag_key(self, key):
         """A flag shortcut in the per-email panel: toggle it, whatever row is
-        highlighted, and come straight back to the same email."""
+        highlighted, and come straight back to the same email. `key` is a
+        frontmatter flag, or "attach" for the attachments toggle."""
         panel = self.panel
         if not panel or not self.item or self.item["fn"] != panel["fn"]:
             return
-        self.adjust("flag", key)
+        if key == "attach":
+            if not self.adjust("attach", None):
+                return              # nothing to save: leave the panel alone
+        else:
+            self.adjust("flag", key)
         fn = panel["fn"]
         self.dismissed = panel["token"]
         self.panel = None
@@ -848,16 +935,29 @@ class Session(object):
         back = set(self.left) | set([fn])
         self.left = [f for f in self.data["order"] if f in back]
 
-    def accept(self, fn, links, flags):
+    def accept(self, fn, links, flags, attach=False):
         note = self.notes[fn]
         src = os.path.join(self.batch, fn)
+        request = None
         try:
             with io.open(src, "r", encoding="utf-8", newline="") as f:
                 text = f.read()
-            new = file_text(text, links, flags)
+            folder = os.path.join(self.vault, settings().get("emails_dir") or "emails")
+            prefix = ""
+            if attach:
+                entry_id, store_id, prefix = note_refs(text)
+                if not entry_id or not prefix or not francis_helper("run_bridge"):
+                    # Never write names for files that cannot be saved.
+                    prefix = ""
+                    say("attachments NOT saved for {0}: the note has no Outlook "
+                        "reference to fetch them by".format(fn))
+                else:
+                    request = {"action": "save_attachments", "entry_id": entry_id,
+                               "store_id": store_id, "prefix": prefix,
+                               "dir": os.path.join(folder, ATTACHMENTS_DIR)}
+            new = file_text(text, links, flags, prefix)
             if new is None:
                 raise ValueError("no frontmatter")
-            folder = os.path.join(self.vault, settings().get("emails_dir") or "emails")
             dest = unique_target(folder, fn)
             with io.open(dest, "w", encoding="utf-8", newline="") as f:
                 f.write(new)
@@ -871,13 +971,59 @@ class Session(object):
         if links and note.get("thread"):
             self.inherited[note["thread"]] = list(links)
         self.filed += 1
-        self.undo_stack.append({"kind": "accept", "fns": [fn], "dest": dest,
-                                "label": u"filing of " + note.get("subject", fn)})
+        entry = {"kind": "accept", "fns": [fn], "dest": dest, "saved": [],
+                 "label": u"filing of " + note.get("subject", fn)}
+        self.undo_stack.append(entry)
+        if request:
+            self.save_attachments(request, entry, note.get("subject", fn))
         say(u"filed {0}{1}".format(
             u" ".join(u"[[{0}]]".format(h) for h in links) or u"with no link",
             u" · " + u", ".join(sorted(k for k in flags if flags[k]))
             if any(flags.values()) else u""))
         self.later(self.advance)
+
+    def save_attachments(self, request, entry, subject):
+        """Ask Outlook for the files, in the background, and say so if it fails.
+
+        The note is already filed, with the prefixed names, by the time this
+        runs: a review that waited on PowerShell and COM for every attachment
+        would not be a fast one. The price is that a failure arrives after the
+        fact -- so it is an error dialog, not a status message that the next
+        panel would have covered. What was saved is recorded on the undo
+        entry, so undoing the filing takes the files back out as well.
+        """
+        try:
+            if not os.path.isdir(request["dir"]):
+                os.makedirs(request["dir"])
+        except OSError as e:
+            return self.attachment_failure(subject, str(e))
+
+        def done(result, error):
+            if error or not result or not result.get("ok"):
+                return self.attachment_failure(
+                    subject, error or (result or {}).get("message") or "no answer")
+            saved = [os.path.join(request["dir"], name)
+                     for name in result.get("saved") or []]
+            entry["saved"].extend(saved)
+            if entry.get("undone"):
+                remove_files(saved)
+            failed = result.get("failed") or []
+            if failed:
+                return self.attachment_failure(
+                    subject, "could not save: " + ", ".join(failed))
+            say(u"saved {0} attachment(s) for {1}".format(len(saved), subject))
+
+        francis_helper("run_bridge")(request, done)
+
+    def attachment_failure(self, subject, detail):
+        message = (u"Email batch: the attachments of\n\n    {0}\n\nwere NOT all "
+                   u"saved.\n\n{1}\n\nThe note is filed and lists them; open it and "
+                   u"press F12 in the body to fetch them from Outlook.").format(
+                       subject, detail)
+        print("EmailBatch: " + message.replace("\n", " "))
+        show = getattr(sublime, "error_message", None)
+        if show:
+            show(message)
 
     def discard(self, fns, via):
         fns = [fn for fn in fns if fn in self.left]
@@ -930,6 +1076,10 @@ class Session(object):
                 os.remove(entry["dest"])
             except OSError as e:
                 say("could not remove {0}: {1}".format(entry["dest"], e))
+            # Attachments saved for it go too; if Outlook has not answered yet,
+            # the flag makes save_attachments remove them when it does.
+            entry["undone"] = True
+            remove_files(entry.get("saved", []))
             self.filed -= 1
         else:
             self.discarded -= len(entry["fns"])
@@ -959,6 +1109,14 @@ class Session(object):
         if name and os.path.normcase(name).startswith(os.path.normcase(self.batch)):
             view.set_scratch(True)
             view.close()
+
+
+def remove_files(paths):
+    for path in paths:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def francis_helper(name):
@@ -1129,7 +1287,7 @@ class EmailBatchFlagCommand(sublime_plugin.WindowCommand):
     """ctrl+r / ctrl+h / ctrl+p while the per-email panel is open."""
 
     def run(self, flag):
-        if _session and flag in FLAG_KEY_LABELS:
+        if _session and (flag in FLAG_KEY_LABELS or flag == "attach"):
             _session.flag_key(flag)
 
 

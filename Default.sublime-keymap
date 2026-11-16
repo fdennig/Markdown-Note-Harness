@@ -246,6 +246,26 @@
             { "key": "email_batch_panel", "operator": "equal", "operand": true }
         ]
     },
+    { // EmailBatch.py: toggle "save this email's attachments when it is filed".
+      //
+      // ctrl+a is select-all everywhere else and must stay so. Three
+      // conditions, all required, confine this binding:
+      //   overlay_visible          -- never in a view: not in a note, not in
+      //                               the console, not in a find field
+      //   email_batch_panel        -- and only in EmailBatch's own per-email
+      //                               panel, not the command palette, Goto
+      //                               Anything, the link picker or the sweep
+      //   email_batch_input_empty  -- and only while nothing is typed in that
+      //                               panel's input line. Once a hub name is
+      //                               being typed there is text to select, and
+      //                               ctrl+a selects it as it always does.
+        "keys": ["ctrl+a"], "command": "email_batch_flag", "args": { "flag": "attach" }, "context":
+        [
+            { "key": "overlay_visible", "operator": "equal", "operand": true },
+            { "key": "email_batch_panel", "operator": "equal", "operand": true },
+            { "key": "email_batch_input_empty", "operator": "equal", "operand": true }
+        ]
+    },
     { // EmailBatch.py: right / left step to the next / previous pending email
       // in the per-email panel WITHOUT deciding anything -- to see what else a
       // sender or a thread holds before a bulk discard, or to deal with

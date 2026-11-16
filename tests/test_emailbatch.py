@@ -212,6 +212,28 @@ check("an LF note with no BOM stays that way",
       u"\r" not in out and not out.startswith(u"﻿") and u"---\n[[x]]\nDear" in out)
 check("no frontmatter means no edit", eb.file_text(u"just text\n", ["x"], {}) is None)
 
+print("\nattachments in the note text")
+WITH = NOTE.replace(u"outlook:\r\n  - entry_id: 00\r\n",
+                    u'date: 2026-11-10 09:05\r\nattachments:\r\n  - "a b.pdf"\r\n'
+                    u'  - "logo.png"\r\noutlook:\r\n  - entry_id: 00AA\r\n'
+                    u"  - store_id: 00BB\r\n")
+check("names are read off the attachments: key",
+      eb.attachment_names(WITH) == ["a b.pdf", "logo.png"])
+check("attachments: [] and a note without the key give none",
+      eb.attachment_names(NOTE) == []
+      and eb.attachment_names(WITH.replace(u'attachments:\r\n  - "a b.pdf"\r\n  - "logo.png"',
+                                           u"attachments: []")) == [])
+check("the Outlook reference and the macro's prefix come from the note",
+      eb.note_refs(WITH) == ("00AA", "00BB", "2026-11-10_0905_"), eb.note_refs(WITH))
+check("a note with no date or reference yields blanks", eb.note_refs(u"---\nclass: email\n---\n")
+      == ("", "", ""))
+out = eb.file_text(WITH, ["x"], {}, "2026-11-10_0905_")
+check("the prefix goes on every attachment name and nowhere else",
+      u'  - "2026-11-10_0905_a b.pdf"\r\n  - "2026-11-10_0905_logo.png"\r\n' in out
+      and out.count(u"2026-11-10_0905_") == 2 and u"  - entry_id: 00AA\r\n" in out, out[:330])
+check("without a prefix the names are untouched",
+      u'  - "a b.pdf"\r\n' in eb.file_text(WITH, ["x"], {}))
+
 print("\nunique_target")
 taken = set([os.path.join("d", "a.md"), os.path.join("d", "a (2).md")])
 check("a free name is used as is",
@@ -615,6 +637,111 @@ step(WINDOW.escape)
 shutil.rmtree(BATCH)
 os.makedirs(BATCH)
 io.open(os.path.join(BATCH, "w.md"), "w").close()   # an unprepared batch again
+eb._session = None
+
+print("\nsaving attachments")
+shutil.rmtree(BATCH)
+os.makedirs(BATCH)
+
+
+def stage_with(name, text, subject):
+    fn, note = stage(name, "Ann", "ann@x.org", subject, "T" + name, [("runTheThing", "thread")])
+    with io.open(os.path.join(BATCH, fn), "w", encoding="utf-8", newline="") as f:
+        f.write(text.replace(u"Thing", subject))
+    return fn, note
+
+
+ROWS4 = [stage_with("att", WITH, "Has files"), stage("plain", "Ann", "ann@x.org", "No files",
+                                                    "Tp", [("runTheThing", "thread")]),
+         stage_with("fail", WITH, "Will fail"),
+         stage_with("noref", WITH.replace(u"  - entry_id: 00AA\r\n", u""), "No reference")]
+DATA4 = dict(DATA, order=[fn for fn, _ in ROWS4], notes=dict(ROWS4))
+s4 = eb.Session(WINDOW, BATCH, DATA4)
+eb._session = s4
+ATT = os.path.join(MAIL, "attachments")
+calls = []
+answers = []
+errors = []
+
+
+def fake_bridge(request, on_done):
+    calls.append(request)
+    for name in ("2026-11-10_0905_a b.pdf", "2026-11-10_0905_logo.png"):
+        io.open(os.path.join(request["dir"], name), "w").close()
+    answers.append(on_done)
+
+
+real_helper = eb.francis_helper
+eb.francis_helper = lambda name: fake_bridge if name == "run_bridge" else None
+sublime.error_message = errors.append
+step(s4.advance)
+
+
+def attach_key():
+    step(lambda: eb.EmailBatchFlagCommand(WINDOW).run("attach"))
+
+
+row = [r for r in WINDOW.rows if r[0].startswith("Save attachments")]
+check("an email with attachments offers to save them, naming them and the key",
+      row and row[0][0] == "Save attachments (2)" and row[0][1] == u"a b.pdf \u00b7 logo.png",
+      row)
+attach_key()
+check("the key turns it on and the File row says so",
+      WINDOW.labels()[0] == "[[runTheThing]]" and u"Has files" in WINDOW.placeholder
+      and s4.drafts["att.md"]["attach"] is True)
+step(lambda: WINDOW.tab("[[runTheThing]]"))
+check("shown with the links on the File row",
+      WINDOW.labels()[0] == u"File under [[runTheThing]] \u00b7 save 2 attachments",
+      WINDOW.labels()[:1])
+step(lambda: WINDOW.callback(0))
+text = vault_note("att.md")
+check("the note is filed at once, with the prefixed names",
+      u'  - "2026-11-10_0905_a b.pdf"\r\n' in text and u"[[runTheThing]]" in text)
+check("Outlook is asked by entry_id for exactly that message, into emails/attachments",
+      len(calls) == 1 and calls[0]["action"] == "save_attachments"
+      and calls[0]["entry_id"] == "00AA" and calls[0]["store_id"] == "00BB"
+      and calls[0]["prefix"] == "2026-11-10_0905_"
+      and os.path.normcase(calls[0]["dir"]) == os.path.normcase(ATT), calls)
+check("the review has already moved on while Outlook works",
+      u"No files" in WINDOW.placeholder)
+answers.pop(0)({"ok": True, "saved": ["2026-11-10_0905_a b.pdf", "2026-11-10_0905_logo.png"],
+                "failed": []}, None)
+check("a clean save raises nothing", errors == []
+      and sorted(os.listdir(ATT)) == ["2026-11-10_0905_a b.pdf", "2026-11-10_0905_logo.png"])
+
+check("an email with no attachments has no such row",
+      not [l for l in WINDOW.labels() if l.startswith("Save attachments")])
+before = list(WINDOW.labels())
+attach_key()
+check("and the key does nothing there but say so",
+      WINDOW.labels() == before and "no attachments" in MESSAGES[-1])
+step(lambda: WINDOW.press("Undo"))
+check("undoing the filing takes the saved files back out too",
+      not os.path.exists(os.path.join(MAIL, "att.md")) and os.listdir(ATT) == []
+      and u"Has files" in WINDOW.placeholder)
+check("and the email comes back with nothing switched on",
+      s4.drafts["att.md"]["attach"] is False)
+step(lambda: WINDOW.callback(0))
+check("filed without the toggle, the names stay as the macro wrote them",
+      u'  - "a b.pdf"\r\n' in vault_note("att.md") and len(calls) == 1)
+step(lambda: WINDOW.callback(0))            # "No files"
+
+attach_key()
+step(lambda: WINDOW.callback(0))            # "Will fail"
+answers.pop(0)({"ok": True, "saved": ["2026-11-10_0905_a b.pdf"], "failed": ["logo.png"]}, None)
+check("a partial save is an error you cannot miss, naming the email and the file",
+      len(errors) == 1 and u"Will fail" in errors[0] and u"logo.png" in errors[0], errors)
+attach_key()
+step(lambda: WINDOW.callback(0))            # "No reference"
+check("with no entry_id nothing is asked of Outlook and no prefix is written",
+      len(calls) == 2 and u'  - "a b.pdf"\r\n' in vault_note("noref.md")
+      and "NOT saved" in " ".join(MESSAGES[-3:]), MESSAGES[-3:])
+eb.francis_helper = real_helper
+del sublime.error_message
+step(WINDOW.escape)
+shutil.rmtree(BATCH)
+os.makedirs(BATCH)
+io.open(os.path.join(BATCH, "w.md"), "w").close()
 eb._session = None
 
 print("\nclear_finished / next_batch")

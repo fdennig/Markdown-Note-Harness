@@ -502,7 +502,8 @@ flowchart LR
    | *Discard all N from …* / *the rest of this thread* | the same, for every pending email from that sender or in that conversation; the row lists the other subjects it would take |
    | *Discard and mute …* | discards them and never stages that sender again |
    | `ctrl+r` / `ctrl+h` / `ctrl+p` | toggles **to reply** / **high priority** / **personal** on the email in hand, from any row. The same as `tab` on a *Flag:* row; neither files. While a per-email panel is open these keys are not Goto Symbol, Replace and Goto Anything |
-   | *Undo: …* | takes back the last decision, as far back as the batch goes |
+   | `ctrl+a`, or *Save attachments (N)* | toggles saving this email's attachments when it is filed. The row appears only when the email has any, and lists them. On `enter` the note is filed at once with the attachment names date-prefixed, and Outlook saves the files into `emails/attachments/` in the background — the same names and place as `ExtractEmailWithAttachments`, so `F12` on a name opens it. If any file fails to save you get an error dialog naming the email. The key is active only in this panel and only while nothing is typed in it; everywhere else, and once you are typing, `ctrl+a` is select-all |
+   | *Undo: …* | takes back the last decision, as far back as the batch goes; undoing a filing also removes the attachments saved for it |
    | `esc` | pauses; *Email batch: Review* resumes |
 
    A link you accept is carried to the rest of its thread: the next email in the

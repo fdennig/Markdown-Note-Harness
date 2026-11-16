@@ -13,9 +13,15 @@
     quotes, '$' and backticks, every one of which is a quoting hazard through
     cmd -> PowerShell):
 
-        {"action": "resolve|open|reply|reply_all|forward",
+        {"action": "resolve|open|reply|reply_all|forward|save_attachments",
          "entry_id": "...", "store_id": "...",
          "subject": "...", "from_email": "...", "date": "2026-07-15 16:00"}
+
+    save_attachments also takes "dir" (an existing folder) and "prefix", and
+    writes every attachment there as <prefix><FileName> -- what the macro's
+    ExtractEmailWithAttachments does, for EmailBatch.py. It answers with
+    "saved" and "failed" name lists. It needs an entry_id: saving the files of
+    a message found by guessing at its subject is not something to do unseen.
 
     Response: exactly one compact JSON object on stdout, always with exit 0.
 
@@ -204,7 +210,7 @@ try {
 }
 
 $action = if ($req.action) { [string]$req.action } else { 'resolve' }
-if ($action -notin @('resolve', 'open', 'reply', 'reply_all', 'forward')) {
+if ($action -notin @('resolve', 'open', 'reply', 'reply_all', 'forward', 'save_attachments')) {
     Emit @{ ok = $false; reason = 'bad_request'; message = "unknown action '$action'" }
 }
 
@@ -213,6 +219,18 @@ $hasSubject = -not [string]::IsNullOrWhiteSpace($req.subject)
 if (-not $hasRefs -and -not $hasSubject) {
     Emit @{ ok = $false; reason = 'bad_request'
             message = 'request carries neither entry_id nor subject' }
+}
+
+if ($action -eq 'save_attachments') {
+    if (-not $hasRefs) {
+        Emit @{ ok = $false; reason = 'bad_request'
+                message = 'save_attachments needs an entry_id' }
+    }
+    if ([string]::IsNullOrWhiteSpace($req.dir) -or
+        -not (Test-Path -LiteralPath ([string]$req.dir) -PathType Container)) {
+        Emit @{ ok = $false; reason = 'bad_request'
+                message = "save_attachments needs an existing 'dir'" }
+    }
 }
 
 # --- Outlook ---------------------------------------------------------------
@@ -297,6 +315,32 @@ if ($action -in @('reply', 'reply_all', 'forward') -and $messageClass -notlike '
         ok = $false; reason = 'unsupported_item'
         message = "'$action' is not available for an item of class '$messageClass'"
         subject = $subject; message_class = $messageClass
+    }
+}
+
+if ($action -eq 'save_attachments') {
+    # One bad attachment costs that attachment, not the rest: an embedded item
+    # or a name the filesystem rejects is reported in 'failed' and the loop
+    # goes on. $saved / $failed stay arrays through +=, so a single name still
+    # serialises as a JSON list.
+    $prefix = if ($req.prefix) { [string]$req.prefix } else { '' }
+    $saved = @()
+    $failed = @()
+    try {
+        foreach ($att in $item.Attachments) {
+            $name = Read-Prop { [string]$att.FileName } ''
+            if (-not $name) { continue }
+            try {
+                $att.SaveAsFile((Join-Path ([string]$req.dir) ($prefix + $name)))
+                $saved += ($prefix + $name)
+            } catch { $failed += $name }
+        }
+    } catch {
+        Emit @{ ok = $false; reason = 'com_error'; message = $_.Exception.Message }
+    }
+    Emit @{
+        ok = $true; action = $action; matched_by = $matchedBy
+        subject = $subject; saved = @($saved); failed = @($failed)
     }
 }
 
